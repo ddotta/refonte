@@ -39,6 +39,23 @@ questionnaire_pogues_ui <- function(id) {
   )
 }
 
+# Champs "adresse de collecte" et "coordonnees du correspondant" éditables.
+# Source unique utilisée à la fois pour l'affichage des champs et pour leur
+# sauvegarde, afin d'éviter toute duplication de la liste des champs.
+UNIT_EDIT_FIELDS <- c("street_number", "street_type", "street_name", "address_supplement",
+                      "zip_code", "city", "contact_name", "contact_tel", "contact_email")
+
+# Valeur à afficher pour un champ unité éditable : priorité à une valeur déjà
+# modifiée et sauvegardée (env_vars$UNIT_XXX), sinon valeur brute de l'unité.
+# isolate() : on ne veut pas qu'une frappe clavier invalide toute la page.
+get_unit_field <- function(ui, env_vars, field) {
+  vn <- paste0("UNIT_", toupper(field))
+  saved <- isolate(env_vars[[vn]])
+  if (!is.null(saved) && !is.na(saved) && nchar(as.character(saved)) > 0) return(as.character(saved))
+  if (!is.null(ui) && nrow(ui) > 0 && field %in% names(ui)) return(as.character(ui[[field]][1]))
+  ""
+}
+
 # Helper: nom de variable pour cellule tableau
 get_table_var_name <- function(q, row_idx, col_idx, pogues) {
   if (!is.null(q$var_mapping) && length(q$var_mapping) > 0) {
@@ -84,29 +101,41 @@ questionnaire_pogues_server <- function(id) {
     observeEvent(input$btn_info_next, { show_info(FALSE) })
     observeEvent(input$btn_back_to_info, { show_info(TRUE) })
 
-    # Populate selectize + stocker les unités pour le tableau cliquable
-    units_df <- reactiveVal(NULL)
-    
-    observe({
+    # Unités de l'enquête en cours : source unique, réutilisée pour peupler le
+    # selectize, afficher le tableau cliquable et le détail de l'unité (évite
+    # de recharger 3 fois les mêmes données).
+    units_r <- reactive({
       name <- survey_name()
       req(name)
-      units <- list_survey_units(name)
-      if (is.null(units) || nrow(units) == 0) return()
-      units_df(units)
-      lbls <- paste0(units$id, " - ", units$corporate_name, " (", units$city, ")")
-      updateSelectizeInput(session, "unit_selector", 
-        choices = setNames(units$id, lbls),
-        selected = character(0),
-        server = TRUE
-      )
+      list_survey_units(name)
     })
 
-    # Clic sur ligne tableau → met à jour selectize
+    # Peuple le selectize UNIQUEMENT quand l'écran de sélection d'unité est
+    # réellement affiché (survey_selected && !unit_selected && !show_info).
+    # Avant ce correctif, la mise à jour partait dès que survey_name() était
+    # connu, c'est-à-dire pendant l'écran d'information de l'enquête, alors que
+    # le champ selectizeInput n'existait pas encore côté navigateur : le
+    # message était perdu et la recherche par unité ne fonctionnait jamais.
+    observe({
+      req(survey_selected(), !unit_selected(), !show_info())
+      units <- units_r()
+      if (is.null(units) || nrow(units) == 0) return()
+      lbls <- paste0(units$id, " - ", units$corporate_name, " (", units$city, ")")
+      choices <- setNames(units$id, lbls)
+      # onFlushed : on attend que le HTML du selectizeInput soit bien envoyé
+      # au client avant d'envoyer la mise à jour des choix.
+      session$onFlushed(function() {
+        updateSelectizeInput(session, "unit_selector", choices = choices,
+          selected = character(0), server = TRUE)
+      }, once = TRUE)
+    })
+
+    # Clic sur une ligne du tableau (class = "unit-table") → sélectionne
+    # l'unité correspondante dans le selectize
     observeEvent(input$click_unit_row, {
       unit_id <- input$click_unit_row
-      if (!is.null(unit_id) && nchar(unit_id) > 0) {
-        updateSelectizeInput(session, "unit_selector", selected = unit_id)
-      }
+      req(unit_id, nchar(unit_id) > 0)
+      updateSelectizeInput(session, "unit_selector", selected = unit_id)
     })
 
     # Sélection via bouton "Démarrer"
@@ -122,9 +151,9 @@ questionnaire_pogues_server <- function(id) {
     })
 
     output$unit_details <- renderUI({
-      name <- survey_name(); uid <- input$unit_selector
-      if (is.null(name) || is.null(uid) || uid == "") return(div("Selectionnez une unite"))
-      units <- list_survey_units(name)
+      uid <- input$unit_selector
+      if (is.null(uid) || uid == "") return(div("Selectionnez une unite"))
+      units <- units_r()
       if (is.null(units)) return(div(""))
       ui <- units[units$id == uid, ]; if (nrow(ui) == 0) return(div(""))
       tagList(
@@ -205,14 +234,20 @@ questionnaire_pogues_server <- function(id) {
     })
 
     # Navigation
+    # Ordre des modules calculé une seule fois par changement pertinent puis
+    # réutilisé partout (au lieu d'appeler build_module_order() 4 fois).
+    module_order <- reactive({
+      p <- pogues(); req(p)
+      build_module_order(p, reactiveValuesToList(env_vars), list())
+    })
     current_index <- reactive({
-      p <- pogues(); req(p, current_module())
-      order <- build_module_order(p, reactiveValuesToList(env_vars), list())
+      req(current_module())
+      order <- module_order()
       idx <- which(order == current_module())
       if (length(idx) == 0) 1 else idx
     })
-    observeEvent(input$btn_next, { p <- pogues(); req(p); order <- build_module_order(p, reactiveValuesToList(env_vars), list()); idx <- current_index(); if (idx < length(order)) current_module(order[idx + 1]) })
-    observeEvent(input$btn_prev, { p <- pogues(); req(p); order <- build_module_order(p, reactiveValuesToList(env_vars), list()); idx <- current_index(); if (idx > 1) current_module(order[idx - 1]) })
+    observeEvent(input$btn_next, { order <- module_order(); idx <- current_index(); if (idx < length(order)) current_module(order[idx + 1]) })
+    observeEvent(input$btn_prev, { order <- module_order(); idx <- current_index(); if (idx > 1) current_module(order[idx - 1]) })
     observe({ p <- pogues(); req(p); for (mn in names(p$modules)) { bn <- paste0("nav_", mn); if (!is.null(input[[bn]]) && input[[bn]] > 0) current_module(mn) } })
 
     # Sauvegarde réponses
@@ -247,12 +282,11 @@ questionnaire_pogues_server <- function(id) {
           }
         }
       }
-      # Sauvegarder adresse/contact modifiés
+      # Sauvegarder adresse de collecte / coordonnées du correspondant modifiées
       if (!is.null(unit_info_data())) {
         uid <- isolate(selected_unit_id()); nm <- isolate(survey_name())
         if (!is.null(uid) && !is.null(nm)) {
-          for (field in c("street_number", "street_type", "street_name", "address_supplement", "zip_code", "city",
-                          "contact_name", "contact_tel", "contact_email")) {
+          for (field in UNIT_EDIT_FIELDS) {
             inp <- paste0("edit_", field); val <- input[[inp]]
             if (!is.null(val) && length(val) == 1) {
               vn <- paste0("UNIT_", toupper(field))
@@ -266,8 +300,8 @@ questionnaire_pogues_server <- function(id) {
 
     # Outputs
     output$progress_bar <- renderUI({
-      p <- pogues(); req(p, current_module())
-      order <- build_module_order(p, reactiveValuesToList(env_vars), list())
+      req(pogues(), current_module())
+      order <- module_order()
       idx <- current_index(); total <- length(order) - 1
       prog <- min(100, round((idx - 1) / max(total, 1) * 100))
       div(div(style = "display: flex; justify-content: space-between; font-size: 12px;", span("Debut"), span(ifelse(idx >= total, "Fin", paste0(prog, "%")))),
@@ -281,8 +315,8 @@ questionnaire_pogues_server <- function(id) {
     })
     output$prev_button <- renderUI({ req(current_module()); if (current_index() > 1) actionButton(session$ns("btn_prev"), "◀ Precedent", class = "btn btn-default") })
     output$next_button <- renderUI({
-      p <- pogues(); req(p, current_module())
-      order <- build_module_order(p, reactiveValuesToList(env_vars), list()); idx <- current_index()
+      req(pogues(), current_module())
+      order <- module_order(); idx <- current_index()
       label <- if (idx < length(order)) "Suivant ▶" else "Terminer"
       actionButton(session$ns("btn_next"), label, class = "btn btn-primary")
     })
@@ -313,7 +347,7 @@ questionnaire_pogues_server <- function(id) {
         ))
       }
       if (survey_selected() && !unit_selected() && show_info()) return(render_survey_info_fun(survey_name()))
-      if (survey_selected() && !unit_selected() && !show_info()) return(render_unit_selection_fun(survey_name()))
+      if (survey_selected() && !unit_selected() && !show_info()) return(render_unit_selection_fun(survey_name(), units_r()))
       if (unit_selected() && !is.null(p)) {
         ui <- unit_info_data()
         return(fluidPage(
@@ -329,20 +363,20 @@ questionnaire_pogues_server <- function(id) {
               fluidRow(
                 column(6,
                   h5(icon("map-marker"), " Adresse de collecte"),
-                  textInput(session$ns("edit_street_number"), "N° voie", value = ui$street_number[1], width = "80px"),
-                  textInput(session$ns("edit_street_type"), "Type voie", value = ui$street_type[1], width = "80px"),
-                  textInput(session$ns("edit_street_name"), "Nom de la voie", value = ui$street_name[1], width = "100%"),
-                  textInput(session$ns("edit_address_supplement"), "Complement", value = ui$address_supplement[1], width = "100%"),
+                  textInput(session$ns("edit_street_number"), "N° voie", value = get_unit_field(ui, env_vars, "street_number"), width = "80px"),
+                  textInput(session$ns("edit_street_type"), "Type voie", value = get_unit_field(ui, env_vars, "street_type"), width = "80px"),
+                  textInput(session$ns("edit_street_name"), "Nom de la voie", value = get_unit_field(ui, env_vars, "street_name"), width = "100%"),
+                  textInput(session$ns("edit_address_supplement"), "Complement", value = get_unit_field(ui, env_vars, "address_supplement"), width = "100%"),
                   fluidRow(
-                    column(4, textInput(session$ns("edit_zip_code"), "Code postal", value = ui$zip_code[1])),
-                    column(8, textInput(session$ns("edit_city"), "Ville", value = ui$city[1], width = "100%"))
+                    column(4, textInput(session$ns("edit_zip_code"), "Code postal", value = get_unit_field(ui, env_vars, "zip_code"))),
+                    column(8, textInput(session$ns("edit_city"), "Ville", value = get_unit_field(ui, env_vars, "city"), width = "100%"))
                   )
                 ),
                 column(6,
                   h5(icon("user"), " Coordonnees du correspondant"),
-                  textInput(session$ns("edit_contact_name"), "Nom prenom", value = ui$contact_name[1], width = "100%"),
-                  textInput(session$ns("edit_contact_tel"), "Telephone", value = ui$contact_tel[1], width = "100%"),
-                  textInput(session$ns("edit_contact_email"), "Email", value = ui$contact_email[1], width = "100%"),
+                  textInput(session$ns("edit_contact_name"), "Nom prenom", value = get_unit_field(ui, env_vars, "contact_name"), width = "100%"),
+                  textInput(session$ns("edit_contact_tel"), "Telephone", value = get_unit_field(ui, env_vars, "contact_tel"), width = "100%"),
+                  textInput(session$ns("edit_contact_email"), "Email", value = get_unit_field(ui, env_vars, "contact_email"), width = "100%"),
                   br(),
                   p(style = "font-size: 11px; color: #999; font-style: italic;", icon("info-circle"), " Les modifications sont automatiquement sauvegardees en base.")
                 )
@@ -395,9 +429,8 @@ render_survey_info_fun <- function(survey_name) {
     actionButton(ns("btn_change_survey"), "← Choisir une autre enquete", class = "btn btn-default"))
 }
 
-render_unit_selection_fun <- function(survey_name) {
+render_unit_selection_fun <- function(survey_name, units) {
   ns <- getDefaultReactiveDomain()$ns
-  units <- list_survey_units(survey_name)
   if (is.null(units) || nrow(units) == 0) {
     return(div(class = "unit-select-container", h2("Selection de l'unite"), p("Aucune donnee d'unite trouvee."),
       actionButton(ns("btn_change_survey"), "← Choisir une autre enquete", class = "btn btn-default")))
@@ -416,7 +449,9 @@ render_unit_selection_fun <- function(survey_name) {
           tags$thead(tags$tr(tags$th("SIRET"), tags$th("Raison sociale"), tags$th("Ville"), tags$th("Code postal"), tags$th("APE"), tags$th("Statut"))),
           tags$tbody(lapply(1:min(nrow(units), 30), function(i) {
             tags$tr(style = "cursor: pointer;",
-              onclick = sprintf("Shiny.setInputValue('%s', '%s', {priority: 'event'})", ns("click_unit_row"), units$id[i]),
+              onclick = sprintf(
+                "Shiny.setInputValue('%s', '%s', {priority: 'event'}); var t=this.closest('table'); if(t) t.querySelectorAll('tr').forEach(function(r){r.classList.remove('unit-highlight');}); this.classList.add('unit-highlight');",
+                ns("click_unit_row"), units$id[i]),
               tags$td(units$id[i]), tags$td(units$corporate_name[i]), tags$td(units$city[i]), tags$td(units$zip_code[i]),
               tags$td(units$ape[i]), tags$td(units$statut_label[i]))
           }))
