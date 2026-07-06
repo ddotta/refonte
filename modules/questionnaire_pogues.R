@@ -7,7 +7,8 @@ questionnaire_pogues_ui <- function(id) {
   ns <- NS(id)
   fluidPage(
     tags$head(
-      tags$link(rel = "stylesheet", type = "text/css", href = "questionnaire.css")
+      tags$link(rel = "stylesheet", type = "text/css", href = "questionnaire.css"),
+      tags$script(src = "editable-table.js")
     ),
     div(class = "questionnaire-module", uiOutput(ns("app_content")))
   )

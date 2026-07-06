@@ -273,15 +273,12 @@ render_table_question <- function(q, pogues, env_vars_list, input_prefix = "") {
     
     div(class = "question-text", q_label),
     
-    tags$table(class = "table table-bordered production-table",
+    tags$table(class = "table table-bordered production-table editable-table",
       tags$thead(tags$tr(
-        tags$th(style = "min-width: 200px;", ""),
         lapply(col_labels, function(lbl) tags$th(HTML(lbl)))
       )),
       tags$tbody(lapply(1:n_rows, function(row_idx) {
-        row_lbl <- if (row_idx <= length(row_labels)) row_labels[row_idx] else paste("Ligne", row_idx)
         tags$tr(
-          tags$td(row_lbl, style = "text-align: left; font-weight: 500;"),
           lapply(seq_along(col_labels), function(col_idx) {
             input_id <- paste0(input_prefix, "tab_", q_name, "_", row_idx, "_", col_idx)
             var_name <- get_var_name(row_idx, col_idx)
@@ -300,10 +297,19 @@ render_table_question <- function(q, pogues, env_vars_list, input_prefix = "") {
                 gsub('"', '', resolve_vtl(var_info$unit, env_vars_list))
               } else ""
               num_val <- tryCatch(as.numeric(gsub("[^0-9.,]", "", current_val)), warning = function(w) NA)
-              tags$td(
-                numericInput(input_id, NULL, value = if (!is.na(num_val)) num_val else NA,
-                             min = 0, step = 0.01, width = "120px"),
-                if (unit_label != "") div(style = "font-size: 11px; color: #666;", unit_label),
+              raw_val <- if (!is.na(num_val)) as.character(num_val) else ""
+              formatted_val <- if (!is.na(num_val)) format_numeric(num_val) else ""
+              
+              tags$td(class = "numeric-cell",
+                `data-original` = raw_val,
+                div(class = "cell-content",
+                  textInput(input_id, NULL, value = raw_val, width = "100%"),
+                  div(class = "cell-indicators",
+                    span(class = "modified-indicator", style = "display: none;", "C"),
+                    HTML('<a href="#" class="reset-btn" style="display:none;" title="Rétablir la valeur initiale"><i class="fa fa-undo"></i></a>')
+                  )
+                ),
+                if (unit_label != "") div(class = "cell-unit", unit_label),
                 if (!is.null(n1_val)) div(class = "n1-value", paste0("N-1: ", format_numeric(n1_val)))
               )
             } else {
