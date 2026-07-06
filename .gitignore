@@ -1,0 +1,22 @@
+.Rproj.user
+.Rhistory
+.RData
+.Renviron
+.Ruserdata
+
+
+/* Les fichiers avec ces extensions
+*.xls
+*.xlsx
+*.ods
+*.pdf
+*.docx
+*.odt
+*.ppt
+*.odp
+*.html
+*.out
+*.txt
+*.sqlite
+*.db
+*.csv
