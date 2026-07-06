@@ -84,19 +84,15 @@ get_choices_from_codelist <- function(pogues, q, env_vars_list) {
   choices
 }
 
-#' Rendu générique d'une question SIMPLE / TEXT / NUMERIC / DATE
+#' Rendu d'une question SIMPLE / TEXT / NUMERIC / DATE
 render_simple_question <- function(q, pogues, env_vars_list, input_prefix = "") {
   q_name <- q$name
   q_label <- resolve_vtl(q$label, env_vars_list)
   var_info <- pogues$variables[[q_name]]
   input_type <- get_input_type(q$type, var_info)
   
-  # Récupérer la valeur : pour les données REM, les variables simples sont des scalaires
   current_val <- env_vars_list[[q_name]]
-  if (is.list(current_val)) {
-    # Si c'est une liste (tableau REM avec un seul élément), prendre le premier
-    current_val <- current_val[[1]]
-  }
+  if (is.list(current_val)) current_val <- current_val[[1]]
   if (is.null(current_val) || is.na(current_val)) current_val <- ""
   
   input_id <- paste0(input_prefix, "q_", q_name)
@@ -121,16 +117,14 @@ render_simple_question <- function(q, pogues, env_vars_list, input_prefix = "") 
   )
 }
 
-#' Rendu générique d'une question SINGLE_CHOICE / MULTIPLE_CHOICE
+#' Rendu d'une question SINGLE_CHOICE / MULTIPLE_CHOICE
 render_choice_question <- function(q, pogues, env_vars_list, input_prefix = "") {
   q_name <- q$name
   q_label <- resolve_vtl(q$label, env_vars_list)
   input_id <- paste0(input_prefix, "q_", q_name)
   
   choices <- get_choices_from_codelist(pogues, q, env_vars_list)
-  if (is.null(choices)) {
-    choices <- c("Oui" = "1", "Non" = "2")
-  }
+  if (is.null(choices)) choices <- c("Oui" = "1", "Non" = "2")
   
   current_val <- env_vars_list[[q_name]]
   if (is.list(current_val)) current_val <- current_val[[1]]
@@ -141,24 +135,19 @@ render_choice_question <- function(q, pogues, env_vars_list, input_prefix = "") 
       radioButtons(input_id, NULL, choices = choices, 
                    selected = current_val %||% "", inline = TRUE)
     } else {
-      tagList(
-        lapply(names(choices), function(choice_val) {
-          choice_label <- choices[[choice_val]]
-          checked <- if (!is.null(current_val) && current_val == choice_val) TRUE else FALSE
-          checkboxInput(paste0(input_id, "_", choice_val), choice_label, value = checked)
-        })
-      )
+      tagList(lapply(names(choices), function(choice_val) {
+        choice_label <- choices[[choice_val]]
+        checked <- if (!is.null(current_val) && current_val == choice_val) TRUE else FALSE
+        checkboxInput(paste0(input_id, "_", choice_val), choice_label, value = checked)
+      }))
     }
   )
 }
 
-#' Récupère la valeur d'une variable à partir des env_vars
-#' Les variables REM peuvent être stockées comme listes (tableaux)
+#' Récupère la valeur d'une variable (tableau REM indexé par ligne)
 get_variable_value <- function(var_name, row_idx, env_vars_list) {
   val <- env_vars_list[[var_name]]
   if (is.null(val)) return("")
-  
-  # Si c'est une liste (valeur tableau REM), indexer par ligne
   if (is.list(val)) {
     if (row_idx <= length(val)) {
       v <- val[[row_idx]]
@@ -167,17 +156,41 @@ get_variable_value <- function(var_name, row_idx, env_vars_list) {
     }
     return("")
   }
-  
-  # Scalaire simple
   if (is.na(val)) return("")
   return(as.character(val))
+}
+
+#' Récupère la valeur N-1 pour une variable et une ligne donnée
+get_n1_value <- function(n1_data, var_name, row_idx) {
+  if (is.null(n1_data)) return(NULL)
+  val <- n1_data[[var_name]]
+  if (is.null(val)) return(NULL)
+  # Les données N-1 sont des vecteurs ou des listes (tableaux)
+  if (is.list(val) || length(val) > 1) {
+    if (row_idx <= length(val)) {
+      v <- val[[row_idx]]
+      if (is.null(v) || is.na(v)) return(NULL)
+      return(v)
+    }
+    return(NULL)
+  }
+  # Scalaire : retourner uniquement pour la ligne 1
+  if (row_idx == 1) return(val)
+  return(NULL)
+}
+
+#' Formate une valeur numérique avec séparateurs de milliers
+format_numeric <- function(val) {
+  if (is.null(val) || is.na(val)) return("")
+  num <- tryCatch(as.numeric(val), warning = function(w) NA)
+  if (is.na(num)) return(as.character(val))
+  format(num, big.mark = " ", scientific = FALSE, trim = TRUE)
 }
 
 # ==============================================================================
 # RENDU DES QUESTIONS TABLE
 # ==============================================================================
 
-#' Rendu générique d'une question TABLE
 render_table_question <- function(q, pogues, env_vars_list, input_prefix = "") {
   q_name <- q$name
   q_label <- resolve_vtl(q$label, env_vars_list)
@@ -194,45 +207,22 @@ render_table_question <- function(q, pogues, env_vars_list, input_prefix = "") {
     return(div("Question tableau mal configurée: ", q_name))
   }
   
-  # Nombre de lignes : déterminé par EXTERNAL ou codelist ou taille dynamique
-  n_rows <- 3  # défaut par défaut
-  
-  # Pour les tableaux DYNAMIC, la taille est donnée par une variable EXTERNAL
-  # Ex: NBLIGNES_TAB_VNB = "2" pour NOVANDIE, "59" pour LACTALIS
-  # Le primary_dim$size n'existe pas pour DYNAMIC, c'est le maximum qui donne la formule
-  # On cherche la taille dans les variables EXTERNAL
-  
-  # Essayer différentes façons de trouver la variable de taille
+  # Nombre de lignes : EXTERNAL > size > codelist > défaut
+  n_rows <- 3
   size_var_name <- NULL
-  
-  # Méthode 1: le champ size du primary_dim (pour les tableaux NON_DYNAMIC)
-  if (!is.null(primary_dim$size)) {
-    size_var_name <- primary_dim$size
-  }
-  
-  # Méthode 2: pour les DYNAMIC, chercher une variable EXTERNAL NBLIGNES_TAB_*
+  if (!is.null(primary_dim$size)) size_var_name <- primary_dim$size
   if (is.null(size_var_name)) {
-    # Construction du nom: NBLIGNES_TAB_<QUESTION_NAME>
-    # Ex: NBLIGNES_TAB_VNB pour la question VNB
-    external_candidate <- paste0("NBLIGNES_TAB_", q_name)
-    if (!is.null(env_vars_list[[external_candidate]])) {
-      size_var_name <- external_candidate
+    ext_candidate <- paste0("NBLIGNES_TAB_", q_name)
+    if (!is.null(env_vars_list[[ext_candidate]])) {
+      size_var_name <- ext_candidate
     } else {
-      # Avec le préfixe CALC_
       calc_candidate <- paste0("CALC_NBLIGNES_TAB_", q_name)
-      if (!is.null(env_vars_list[[calc_candidate]])) {
-        size_var_name <- calc_candidate
-      }
+      if (!is.null(env_vars_list[[calc_candidate]])) size_var_name <- calc_candidate
     }
   }
-  
   if (!is.null(size_var_name)) {
     size_val <- env_vars_list[[size_var_name]]
-    if (!is.null(size_val)) {
-      n_rows <- as.numeric(size_val)
-    } else {
-      n_rows <- as.numeric(size_var_name)
-    }
+    if (!is.null(size_val)) n_rows <- as.numeric(size_val) else n_rows <- as.numeric(size_var_name)
   } else if (!is.null(primary_dim$code_list)) {
     cl <- pogues$code_lists[[primary_dim$code_list]]
     if (!is.null(cl)) n_rows <- length(cl)
@@ -242,9 +232,7 @@ render_table_question <- function(q, pogues, env_vars_list, input_prefix = "") {
   # Labels des colonnes
   col_labels <- sapply(measure_dims, function(d) {
     lbl <- d$label
-    if (!is.null(lbl)) {
-      resolve_vtl(paste(lbl, collapse = ""), env_vars_list)
-    } else ""
+    if (!is.null(lbl)) resolve_vtl(paste(lbl, collapse = ""), env_vars_list) else ""
   })
   
   # Labels des lignes
@@ -253,109 +241,80 @@ render_table_question <- function(q, pogues, env_vars_list, input_prefix = "") {
     cl <- pogues$code_lists[[primary_dim$code_list]]
     if (!is.null(cl)) row_labels <- unname(unlist(cl))
   }
-  if (is.null(row_labels)) {
-    row_labels <- paste("Ligne", 1:n_rows)
-  }
+  if (is.null(row_labels)) row_labels <- paste("Ligne", 1:n_rows)
   
-  # Construire le mapping variable → cellule à partir du Mapping du Pogues JSON
-  # Format MappingTarget = "row col" → source = ID de variable
-  cell_map <- list()
-  if (length(q$mapping) > 0) {
-    for (m in q$mapping) {
-      target <- m$MappingTarget
-      source <- m$MappingSource
-      parts <- strsplit(target, " ")[[1]]
-      if (length(parts) == 2) {
-        r <- as.numeric(parts[1])
-        c <- as.numeric(parts[2])
-        cell_map[[paste(r, c)]] <- source
-      }
-    }
-  }
-  
-  # Fonction pour récupérer le nom de variable Pogues à partir du var_mapping
+  # Noms de variable par colonne
   get_var_name <- function(row_idx, col_idx) {
     key <- paste(row_idx, col_idx)
-    
-    # 1) Utiliser var_mapping (nouveau) qui mappe "1 1" → "VNB1"
     if (!is.null(q$var_mapping) && length(q$var_mapping) > 0) {
-      var_name <- q$var_mapping[[key]]
-      if (!is.null(var_name)) return(var_name)
+      vn <- q$var_mapping[[key]]
+      if (!is.null(vn)) return(vn)
     }
-    
-    # 2) Fallback: utiliser les noms des variables des dimensions MEASURE
     if (col_idx <= length(measure_dims)) {
       dim <- measure_dims[[col_idx]]
       if (!is.null(dim$name)) return(dim$name)
     }
-    
-    # 3) Fallback ultime: nom construit
     paste0(q_name, col_idx)
   }
   
-  # Obtenir les noms de variables pour chaque colonne
-  col_var_names <- sapply(seq_along(measure_dims), function(col_idx) {
-    get_var_name(1, col_idx)
-  })
+  col_var_names <- sapply(seq_along(measure_dims), function(col_idx) get_var_name(1, col_idx))
+  
+  # Données N-1
+  n1_data <- env_vars_list[["_N1_DATA_"]]
+  has_n1 <- !is.null(n1_data) && length(n1_data) > 0
   
   div(style = "margin-bottom: 30px; overflow-x: auto;",
     
     # Déclarations/help
     lapply(q$declarations, function(d) {
       txt <- resolve_vtl(d$text, env_vars_list)
-      if (txt != "") {
-        div(class = "help-text", HTML(gsub("\r\n", "<br>", txt)))
-      }
+      if (txt != "") div(class = "help-text", HTML(gsub("\r\n", "<br>", txt)))
     }),
     
     div(class = "question-text", q_label),
     
     tags$table(class = "table table-bordered production-table",
-      tags$thead(
+      tags$thead(tags$tr(
+        tags$th(style = "min-width: 200px;", ""),
+        lapply(col_labels, function(lbl) tags$th(HTML(lbl)))
+      )),
+      tags$tbody(lapply(1:n_rows, function(row_idx) {
+        row_lbl <- if (row_idx <= length(row_labels)) row_labels[row_idx] else paste("Ligne", row_idx)
         tags$tr(
-          tags$th(style = "min-width: 200px;", 
-            if (!is.null(primary_dim$label)) resolve_vtl(primary_dim$label, env_vars_list) else "Catégorie"),
-          lapply(col_labels, function(lbl) tags$th(HTML(lbl)))
+          tags$td(row_lbl, style = "text-align: left; font-weight: 500;"),
+          lapply(seq_along(col_labels), function(col_idx) {
+            input_id <- paste0(input_prefix, "tab_", q_name, "_", row_idx, "_", col_idx)
+            var_name <- get_var_name(row_idx, col_idx)
+            var_info <- pogues$variables[[var_name]]
+            current_val <- get_variable_value(var_name, row_idx, env_vars_list)
+            
+            is_numeric <- (!is.null(var_info) && var_info$type %in% c("NUMERIC", "INTEGER")) ||
+                          grepl("^[0-9]+(\\.[0-9]+)?$", current_val)
+            
+            # Valeur N-1 pour cette cellule
+            n1_val <- NULL
+            if (has_n1) n1_val <- get_n1_value(n1_data, var_name, row_idx)
+            
+            if (is_numeric) {
+              unit_label <- if (!is.null(var_info) && !is.na(var_info$unit)) {
+                gsub('"', '', resolve_vtl(var_info$unit, env_vars_list))
+              } else ""
+              num_val <- tryCatch(as.numeric(gsub("[^0-9.,]", "", current_val)), warning = function(w) NA)
+              tags$td(
+                numericInput(input_id, NULL, value = if (!is.na(num_val)) num_val else NA,
+                             min = 0, step = 0.01, width = "120px"),
+                if (unit_label != "") div(style = "font-size: 11px; color: #666;", unit_label),
+                if (!is.null(n1_val)) div(class = "n1-value", paste0("N-1: ", format_numeric(n1_val)))
+              )
+            } else {
+              tags$td(
+                textInput(input_id, NULL, value = current_val, width = "150px"),
+                if (!is.null(n1_val)) div(class = "n1-value", paste0("N-1: ", as.character(n1_val)))
+              )
+            }
+          })
         )
-      ),
-      tags$tbody(
-        lapply(1:n_rows, function(row_idx) {
-          row_lbl <- if (row_idx <= length(row_labels)) row_labels[row_idx] else paste("Ligne", row_idx)
-          tags$tr(
-            tags$td(row_lbl, style = "text-align: left; font-weight: 500;"),
-            lapply(seq_along(col_labels), function(col_idx) {
-              input_id <- paste0(input_prefix, "tab_", q_name, "_", row_idx, "_", col_idx)
-              
-              # Récupérer le nom de la variable pour cette colonne
-              var_name <- get_var_name(row_idx, col_idx)
-              var_info <- pogues$variables[[var_name]]
-              
-              # Récupérer la valeur : indexée par ligne si c'est une liste
-              current_val <- get_variable_value(var_name, row_idx, env_vars_list)
-              
-              # Déterminer le type d'input
-              is_numeric <- (!is.null(var_info) && var_info$type %in% c("NUMERIC", "INTEGER")) ||
-                            grepl("^[0-9]+(\\.[0-9]+)?$", current_val)
-              
-              if (is_numeric) {
-                unit_label <- if (!is.null(var_info) && !is.na(var_info$unit)) {
-                  gsub('"', '', resolve_vtl(var_info$unit, env_vars_list))
-                } else ""
-                num_val <- tryCatch(as.numeric(gsub("[^0-9.,]", "", current_val)), warning = function(w) NA)
-                tags$td(
-                  numericInput(input_id, NULL, value = if (!is.na(num_val)) num_val else NA,
-                               min = 0, step = 0.01, width = "120px"),
-                  if (unit_label != "") div(style = "font-size: 11px; color: #666;", unit_label)
-                )
-              } else {
-                tags$td(
-                  textInput(input_id, NULL, value = current_val, width = "150px")
-                )
-              }
-            })
-          )
-        })
-      )
+      }))
     ),
     
     # Contrôles
@@ -375,35 +334,28 @@ render_table_question <- function(q, pogues, env_vars_list, input_prefix = "") {
 render_module <- function(module_name, pogues, env_vars_list, input_prefix = "") {
   mod <- pogues$modules[[module_name]]
   if (is.null(mod)) return(h3("Module non trouvé : ", module_name))
-  
-  tagList(
-    lapply(names(mod$questions), function(q_name) {
-      q <- mod$questions[[q_name]]
-      input_type <- get_input_type(q$type, pogues$variables[[q_name]])
-      
-      if (input_type == "table") {
-        render_table_question(q, pogues, env_vars_list, input_prefix)
-      } else if (input_type %in% c("radio", "checkbox")) {
-        render_choice_question(q, pogues, env_vars_list, input_prefix)
-      } else if (input_type == "submodule") {
-        NULL
-      } else {
-        render_simple_question(q, pogues, env_vars_list, input_prefix)
-      }
-    })
-  )
+  tagList(lapply(names(mod$questions), function(q_name) {
+    q <- mod$questions[[q_name]]
+    input_type <- get_input_type(q$type, pogues$variables[[q_name]])
+    if (input_type == "table") {
+      render_table_question(q, pogues, env_vars_list, input_prefix)
+    } else if (input_type %in% c("radio", "checkbox")) {
+      render_choice_question(q, pogues, env_vars_list, input_prefix)
+    } else if (input_type == "submodule") {
+      NULL
+    } else {
+      render_simple_question(q, pogues, env_vars_list, input_prefix)
+    }
+  }))
 }
 
-#' Module FIN générique
+#' Module FIN
 render_fin_module <- function(eid) {
-  fluidRow(
-    column(12, align = "center", style = "padding: 50px 0;",
-      div(style = "font-size: 48px;", icon("check-circle", class = "text-success")),
-      h3("Questionnaire terminé", style = "color: #2c3e50;"),
-      p("Merci d'avoir répondu à l'enquête.", style = "font-size: 16px; color: #555;"),
-      p(paste0("Référence : ", eid), style = "color: #777;"),
-      br(),
-      actionButton("btn_submit", "Soumettre le questionnaire", class = "btn btn-success btn-lg")
-    )
-  )
+  fluidRow(column(12, align = "center", style = "padding: 50px 0;",
+    div(style = "font-size: 48px;", icon("check-circle", class = "text-success")),
+    h3("Questionnaire terminé", style = "color: #2c3e50;"),
+    p("Merci d'avoir répondu à l'enquête.", style = "font-size: 16px; color: #555;"),
+    p(paste0("Référence : ", eid), style = "color: #777;"), br(),
+    actionButton("btn_submit", "Soumettre le questionnaire", class = "btn btn-success btn-lg")
+  ))
 }

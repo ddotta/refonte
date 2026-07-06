@@ -65,6 +65,82 @@ load_unit_data_from_rem <- function(survey_name, unit_id) {
 }
 
 # ==============================================================================
+# CHARGEMENT N-1 (edited_previous_EAL.json)
+# ==============================================================================
+load_n1_data <- function(survey_name, unit_id) {
+  if (is.null(survey_name) || is.null(unit_id)) return(list())
+  path <- file.path("..", survey_name, "insee", "reprise", "historique_external", "edited_previous_EAL.json")
+  if (!file.exists(path)) return(list())
+  data <- fromJSON(path, simplifyVector = FALSE, simplifyDataFrame = FALSE, simplifyMatrix = FALSE)
+  previous <- data$editedPrevious
+  if (is.null(previous) || length(previous) == 0) return(list())
+  
+  # Récupérer les départements VNB1 de l'unité courante
+  # pour trouver l'entrée N-1 correspondante
+  rem_path <- file.path("..", survey_name, "insee", "REM", "interrogations.json")
+  if (!file.exists(rem_path)) return(list())
+  rem_data <- fromJSON(rem_path, simplifyVector = FALSE, simplifyDataFrame = FALSE, simplifyMatrix = FALSE)
+  
+  # Chercher les données VNB1 de l'unité courante
+  current_vnb1 <- NULL
+  for (unit in rem_data) {
+    uid <- if (!is.null(unit$displayName)) unit$displayName else if (!is.null(unit$originId)) unit$originId else ""
+    if (uid == unit_id) {
+      if (!is.null(unit$questionnaires) && length(unit$questionnaires) > 0) {
+        qd <- unit$questionnaires[[1]]$questionningData
+        if (!is.null(qd$COLLECTED$VNB1$COLLECTED)) {
+          current_vnb1 <- qd$COLLECTED$VNB1$COLLECTED
+        }
+      }
+      break
+    }
+  }
+  
+  if (is.null(current_vnb1)) return(list())
+  
+  # Normaliser les départements pour la comparaison
+  current_depts <- sort(unique(as.character(unlist(current_vnb1))))
+  
+  # Chercher dans les N-1 l'entrée qui a les mêmes départements VNB1
+  best_match <- NULL
+  best_match_score <- -1
+  
+  for (entry in previous) {
+    if (!is.null(entry$VNB1)) {
+      n1_vnb1 <- unlist(entry$VNB1)
+      n1_depts <- sort(unique(as.character(n1_vnb1[!is.na(n1_vnb1)])))
+      # Calculer le score de correspondance
+      if (length(current_depts) == length(n1_depts)) {
+        if (all(current_depts == n1_depts)) {
+          # Correspondance exacte
+          best_match <- entry
+          best_match_score <- length(current_depts)
+          break
+        }
+      }
+    }
+  }
+  
+  if (is.null(best_match)) {
+    message("Aucune donnee N-1 trouvee pour ", unit_id)
+    return(list())
+  }
+  
+  n1 <- list()
+  for (vname in names(best_match)) {
+    if (vname == "interrogationId" || vname == "ANNEE_DONNEES" ||
+        vname == "COM_GEST" || vname == "COM_GEST2" ||
+        grepl("^FILTRE", vname) || vname == "ESTIM") next
+    val <- best_match[[vname]]
+    if (!is.null(val)) {
+      n1[[vname]] <- val
+    }
+  }
+  message("Donnees N-1 trouvees pour ", unit_id, " (", length(n1), " variables)")
+  return(n1)
+}
+
+# ==============================================================================
 # FONCTIONS CSV
 # ==============================================================================
 list_data_files <- function(survey_name) {
@@ -173,7 +249,6 @@ load_survey_units_from_rem <- function(survey_name) {
         if (contact_tel == "" && !is.null(c$phoneNumbers[[1]]$number)) contact_tel <- c$phoneNumbers[[1]]$number
       }
     }
-    # Email gestionnaire depuis communicationPersos
     manager_email <- ""
     if (!is.null(unit$communicationPersos) && length(unit$communicationPersos) > 0) {
       for (cp in unit$communicationPersos) {
@@ -226,37 +301,44 @@ list_survey_units <- function(survey_name) {
   units
 }
 
-#' Charge les données d'une unité
+#' Charge les données d'une unité (REM + N-1)
 load_unit_data <- function(survey_name, unit_id) {
   if (is.null(survey_name) || is.null(unit_id)) return(list())
+  
+  # Données courantes depuis REM
   result <- load_unit_data_from_rem(survey_name, unit_id)
-  if (length(result) > 0) { message("Donnees chargees depuis interrogations.json pour ", unit_id); return(result) }
-  files <- list_data_files(survey_name)
-  if (length(files) == 0) return(list())
-  result <- list()
-  for (name in names(files)) {
-    path <- files[[name]]; data <- load_csv_data(path)
-    if (is.null(data)) next
-    unit_data <- data[data$usualSurveyUnitId == unit_id, , drop = FALSE]
-    if (nrow(unit_data) == 0) next
-    has_module_col <- "Q_REGIONS_ESSENCES" %in% names(unit_data)
-    if (has_module_col) {
-      for (i in 1:nrow(unit_data)) {
-        row <- unit_data[i, ]; module_val <- as.character(row$Q_REGIONS_ESSENCES)
-        suffix <- if (!is.null(module_val) && !is.na(module_val)) gsub("-", "_", module_val) else paste0("row_", i)
-        for (col in names(row)) {
-          if (col %in% c("usualSurveyUnitId", "Q_REGIONS_ESSENCES")) next
-          val <- as.character(row[[col]]); if (is.na(val) || val == "") next
-          result[[paste0(col, "_", suffix)]] <- val
+  if (length(result) == 0) {
+    # Fallback CSV
+    files <- list_data_files(survey_name)
+    if (length(files) == 0) return(list())
+    result <- list()
+    for (name in names(files)) {
+      path <- files[[name]]; data <- load_csv_data(path)
+      if (is.null(data)) next
+      unit_data <- data[data$usualSurveyUnitId == unit_id, , drop = FALSE]
+      if (nrow(unit_data) == 0) next
+      has_module_col <- "Q_REGIONS_ESSENCES" %in% names(unit_data)
+      if (has_module_col) {
+        for (i in 1:nrow(unit_data)) { row <- unit_data[i, ]; mv <- as.character(row$Q_REGIONS_ESSENCES)
+          suff <- if (!is.null(mv) && !is.na(mv)) gsub("-", "_", mv) else paste0("row_", i)
+          for (col in names(row)) { if (col %in% c("usualSurveyUnitId", "Q_REGIONS_ESSENCES")) next; v <- as.character(row[[col]]); if (is.na(v) || v == "") next; result[[paste0(col, "_", suff)]] <- v }
         }
-      }
-    } else {
-      for (i in 1:nrow(unit_data)) { row <- unit_data[i, ]
-        for (col in names(row)) { if (col == "usualSurveyUnitId") next; val <- as.character(row[[col]]); if (is.na(val) || val == "") next; result[[col]] <- val }
+      } else {
+        for (i in 1:nrow(unit_data)) { row <- unit_data[i, ]
+          for (col in names(row)) { if (col == "usualSurveyUnitId") next; v <- as.character(row[[col]]); if (is.na(v) || v == "") next; result[[col]] <- v }
+        }
       }
     }
   }
-  message("Donnees chargees depuis CSV pour ", unit_id)
+  message("Donnees chargees pour ", unit_id)
+  
+  # Charger les données N-1 et les stocker dans result
+  n1_data <- load_n1_data(survey_name, unit_id)
+  if (length(n1_data) > 0) {
+    result[["_N1_DATA_"]] <- n1_data
+    message("Donnees N-1 chargees pour ", unit_id, " (", length(n1_data), " variables)")
+  }
+  
   result
 }
 

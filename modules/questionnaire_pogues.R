@@ -7,33 +7,7 @@ questionnaire_pogues_ui <- function(id) {
   ns <- NS(id)
   fluidPage(
     tags$head(
-      tags$style(HTML("
-        .questionnaire-module { padding: 15px; }
-        .questionnaire-module .module-header { background-color: #2c3e50; color: white; padding: 10px 15px; border-radius: 5px; margin-bottom: 15px; }
-        .questionnaire-module .module-header h3 { margin: 0; font-size: 16px; }
-        .questionnaire-module .question-text { font-size: 15px; font-weight: 500; margin-bottom: 15px; padding: 10px; background-color: #f8f9fa; border-left: 4px solid #2c3e50; border-radius: 3px; }
-        .questionnaire-module .help-text { font-size: 13px; color: #555; font-style: italic; padding: 8px; margin-bottom: 10px; background-color: #eaf2f8; border-left: 3px solid #3498db; border-radius: 3px; }
-        .questionnaire-module .nav-buttons { margin-top: 20px; padding-top: 15px; border-top: 1px solid #ddd; }
-        .questionnaire-module .welcome-container { max-width: 700px; margin: 60px auto; text-align: center; }
-        .questionnaire-module .survey-card { display: inline-block; width: 280px; margin: 15px; padding: 30px 20px; background-color: #fff; border: 2px solid #ecf0f1; border-radius: 10px; cursor: pointer; transition: all 0.3s ease; vertical-align: top; }
-        .questionnaire-module .survey-card:hover { border-color: #2c3e50; box-shadow: 0 4px 15px rgba(0,0,0,0.1); transform: translateY(-2px); }
-        .questionnaire-module .survey-card .icon { font-size: 48px; color: #2c3e50; margin-bottom: 15px; }
-        .questionnaire-module .unit-select-container { max-width: 1000px; margin: 20px auto; }
-        .questionnaire-module .sidebar-nav { background-color: #f8f9fa; border-radius: 5px; padding: 10px; min-height: 400px; }
-        .questionnaire-module .sidebar-nav .nav-pills > li > a { border-radius: 3px; color: #2c3e50; padding: 6px 12px; font-size: 13px; border-bottom: 1px solid #ecf0f1; }
-        .questionnaire-module .sidebar-nav .nav-pills > li.active > a { background-color: #2c3e50; color: white; }
-        .questionnaire-module .unit-table { margin-top: 10px; max-height: 400px; overflow-y: auto; }
-        .questionnaire-module .unit-table td { font-size: 12px; }
-        .questionnaire-module .info-section { background-color: #f8f9fa; border-radius: 4px; padding: 15px; margin-bottom: 15px; border-left: 4px solid #3498db; }
-        .questionnaire-module .info-section h5 { color: #2c3e50; margin-top: 0; border-bottom: 1px solid #ddd; padding-bottom: 5px; }
-        .questionnaire-module form { margin-bottom: 0; }
-        .questionnaire-module .form-group { margin-bottom: 5px; }
-        .questionnaire-module .loading-container { text-align: center; padding: 100px 0; }
-        .questionnaire-module .production-table th { background-color: #2c3e50; color: white; font-size: 12px; text-align: center; }
-        .questionnaire-module .production-table td { text-align: center; vertical-align: middle; }
-        .questionnaire-module .unit-highlight { background-color: #fef9e7 !important; }
-        .shiny-notification { position: fixed; top: 10px; right: 10px; z-index: 99999; }
-      "))
+      tags$link(rel = "stylesheet", type = "text/css", href = "questionnaire.css")
     ),
     div(class = "questionnaire-module", uiOutput(ns("app_content")))
   )
@@ -390,15 +364,25 @@ questionnaire_pogues_server <- function(id) {
       create_enquete(db, eid, p$questionnaire_id, p$name)
       unit_data <- load_unit_data(name, uid)
       for (var_name in names(unit_data)) {
+        if (var_name == "_N1_DATA_") {
+          env_vars[[var_name]] <- unit_data[[var_name]]
+          next
+        }
         val <- unit_data[[var_name]]
-        if (is.list(val)) env_vars[[var_name]] <- val else env_vars[[var_name]] <- val
         if (is.list(val)) {
+          env_vars[[var_name]] <- val
           for (i in seq_along(val)) {
             v <- val[[i]]
-            if (!is.null(v) && !is.na(v)) save_response(db, eid, p$questionnaire_id, var_name, as.character(v), ligne = i, colonne = 1)
+            # v peut être NULL, NA, scalaire ou vecteur ; seul le cas scalaire non-NA est sauvegardé
+            if (length(v) == 1 && !is.null(v) && !is.na(v)) {
+              save_response(db, eid, p$questionnaire_id, var_name, as.character(v), ligne = i, colonne = 1)
+            }
           }
+        } else if (length(val) == 1) {
+          env_vars[[var_name]] <- val
+          if (!is.na(val)) save_response(db, eid, p$questionnaire_id, var_name, as.character(val))
         } else {
-          save_response(db, eid, p$questionnaire_id, var_name, as.character(val))
+          env_vars[[var_name]] <- val
         }
       }
       mods <- build_module_order(p, reactiveValuesToList(env_vars), list())
