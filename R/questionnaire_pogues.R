@@ -5,21 +5,29 @@
 # UI
 questionnaire_pogues_ui <- function(id) {
   ns <- NS(id)
+  # Cache-busting : évite qu'un navigateur (ou un proxy) serve une version
+  # périmée de editable-table.js/questionnaire.css après une mise à jour.
+  asset_v <- as.integer(Sys.time())
   fluidPage(
     tags$head(
-      tags$link(rel = "stylesheet", type = "text/css", href = "questionnaire.css"),
-      tags$script(src = "editable-table.js")
+      tags$link(rel = "stylesheet", type = "text/css", href = paste0("questionnaire.css?v=", asset_v)),
+      tags$script(src = paste0("editable-table.js?v=", asset_v))
     ),
     div(class = "questionnaire-module", uiOutput(ns("app_content")))
   )
 }
 
 # Champs "adresse de collecte" et "coordonnees du correspondant" éditables.
+# Source unique utilisée à la fois pour l'affichage des champs et pour leur
+# sauvegarde, afin d'éviter toute duplication de la liste des champs.
 UNIT_EDIT_FIELDS <- c(
   "street_number", "street_type", "street_name", "address_supplement",
   "zip_code", "city", "contact_name", "contact_tel", "contact_email"
 )
 
+# Valeur à afficher pour un champ unité éditable : priorité à une valeur déjà
+# modifiée et sauvegardée (env_vars$UNIT_XXX), sinon valeur brute de l'unité.
+# isolate() : on ne veut pas qu'une frappe clavier invalide toute la page.
 get_unit_field <- function(ui, env_vars, field) {
   vn <- paste0("UNIT_", toupper(field))
   saved <- isolate(env_vars[[vn]])
@@ -32,6 +40,8 @@ get_unit_field <- function(ui, env_vars, field) {
   ""
 }
 
+# Applique les modifications enregistrées via la fenêtre modale ("gestionnaire
+# a modifié l'adresse/le contact") par-dessus les données brutes des unités.
 apply_unit_overrides <- function(units, overrides) {
   if (is.null(units) || length(overrides) == 0) {
     return(units)
@@ -46,6 +56,9 @@ apply_unit_overrides <- function(units, overrides) {
   units
 }
 
+# Construit les champs de la fenêtre modale d'édition adresse/contact.
+# env_vars_ctx = NULL sur l'écran de sélection (pas encore de réponses
+# enregistrées) ; sinon priorité aux réponses déjà sauvegardées (get_unit_field).
 build_unit_edit_fields_ui <- function(ns, ui, env_vars_ctx = NULL) {
   val <- function(field) {
     if (!is.null(env_vars_ctx)) {
@@ -79,6 +92,18 @@ build_unit_edit_fields_ui <- function(ns, ui, env_vars_ctx = NULL) {
   )
 }
 
+# Recherche une question (par nom) dans l'ensemble des modules du questionnaire
+find_question_by_name <- function(pogues, q_name) {
+  for (mn in names(pogues$modules)) {
+    mod <- pogues$modules[[mn]]
+    if (!is.null(mod) && !is.null(mod$questions[[q_name]])) {
+      return(mod$questions[[q_name]])
+    }
+  }
+  NULL
+}
+
+# Helper: nom de variable pour cellule tableau
 get_table_var_name <- function(q, row_idx, col_idx, pogues) {
   if (!is.null(q$var_mapping) && length(q$var_mapping) > 0) {
     key <- paste(row_idx, col_idx)
@@ -125,8 +150,20 @@ questionnaire_pogues_server <- function(id) {
     enquete_id <- reactiveVal(NULL)
     current_module <- reactiveVal(NULL)
     env_vars <- reactiveValues()
+    # Valeurs d'origine (import), figées au chargement de l'unité : jamais
+    # modifiées ensuite, elles servent de référence pour savoir si une cellule
+    # a été corrigée (badge "C") et pour la restaurer (bouton "Rétablir"). Ceci
+    # est indépendant de env_vars (qui, lui, contient les valeurs courantes /
+    # sauvegardées) afin que l'état "corrigé" reste visible même après avoir
+    # navigué vers un autre module puis être revenu en arrière.
+    original_vars <- reactiveVal(list())
+    # Stocke les infos unité pour adresse/contact
     unit_info_data <- reactiveVal(NULL)
+    # Modifications d'adresse/contact faites via la fenêtre modale, par unité,
+    # AVANT le démarrage du questionnaire (pas encore de base de réponses)
     unit_overrides <- reactiveVal(list())
+    # Incrémenté pour forcer le rafraîchissement du panneau adresse/contact
+    # (questionnaire en cours) après une modification via la modale
     unit_panel_refresh <- reactiveVal(0)
 
     observe({
@@ -147,18 +184,28 @@ questionnaire_pogues_server <- function(id) {
       show_info(TRUE)
     })
 
+    # Unités de l'enquête en cours : source unique, réutilisée pour peupler le
+    # selectize, afficher le tableau cliquable et le détail de l'unité (évite
+    # de recharger 3 fois les mêmes données).
     units_r <- reactive({
       name <- survey_name()
       req(name)
       list_survey_units(name)
     })
 
+    # Unités + modifications faites via la fenêtre modale (adresse/contact)
     units_effective_r <- reactive({
       units <- units_r()
       req(units)
       apply_unit_overrides(units, unit_overrides())
     })
 
+    # Peuple le selectize UNIQUEMENT quand l'écran de sélection d'unité est
+    # réellement affiché (survey_selected && !unit_selected && !show_info).
+    # Avant ce correctif, la mise à jour partait dès que survey_name() était
+    # connu, c'est-à-dire pendant l'écran d'information de l'enquête, alors que
+    # le champ selectizeInput n'existait pas encore côté navigateur : le
+    # message était perdu et la recherche par unité ne fonctionnait jamais.
     observe({
       req(survey_selected(), !unit_selected(), !show_info())
       units <- units_effective_r()
@@ -167,6 +214,8 @@ questionnaire_pogues_server <- function(id) {
       }
       lbls <- paste0(units$id, " - ", units$corporate_name, " (", units$city, ")")
       choices <- setNames(units$id, lbls)
+      # onFlushed : on attend que le HTML du selectizeInput soit bien envoyé
+      # au client avant d'envoyer la mise à jour des choix.
       session$onFlushed(function() {
         updateSelectizeInput(session, "unit_selector",
           choices = choices,
@@ -175,12 +224,15 @@ questionnaire_pogues_server <- function(id) {
       }, once = TRUE)
     })
 
+    # Clic sur une ligne du tableau (class = "unit-table") → sélectionne
+    # l'unité correspondante dans le selectize
     observeEvent(input$click_unit_row, {
       unit_id <- input$click_unit_row
       req(unit_id, nchar(unit_id) > 0)
       updateSelectizeInput(session, "unit_selector", selected = unit_id)
     })
 
+    # Sélection via bouton "Démarrer"
     observeEvent(input$btn_select_unit, {
       unit_id <- input$unit_selector
       if (!is.null(unit_id) && unit_id != "") {
@@ -253,6 +305,9 @@ questionnaire_pogues_server <- function(id) {
       }
     )
 
+    # Ouverture de la fenêtre modale de modification des détails de l'unité.
+    # Fonctionne dans les deux contextes : écran de sélection (uid choisi dans
+    # le selectize) et questionnaire en cours (unité déjà démarrée).
     observeEvent(input$btn_edit_unit_details, {
       if (isolate(unit_selected())) {
         ui <- isolate(unit_info_data())
@@ -280,6 +335,7 @@ questionnaire_pogues_server <- function(id) {
       ))
     })
 
+    # Sauvegarde des modifications faites dans la fenêtre modale
     observeEvent(input$btn_save_unit_modal, {
       ov <- list()
       for (field in UNIT_EDIT_FIELDS) {
@@ -287,6 +343,7 @@ questionnaire_pogues_server <- function(id) {
         if (!is.null(val)) ov[[field]] <- as.character(val)
       }
       if (isolate(unit_selected())) {
+        # Unité en cours de traitement : sauvegarde immédiate dans l'enquête
         p <- isolate(pogues())
         db <- isolate(db_path())
         eid <- isolate(enquete_id())
@@ -328,6 +385,9 @@ questionnaire_pogues_server <- function(id) {
       enquete_id(eid)
       create_enquete(db, eid, p$questionnaire_id, p$name)
       unit_data <- load_unit_data(name, uid)
+      # Snapshot des valeurs d'origine AVANT toute sauvegarde/écrasement : c'est
+      # la référence utilisée pour détecter et afficher les corrections.
+      original_vars(unit_data)
       for (var_name in names(unit_data)) {
         if (var_name == "_N1_DATA_") {
           env_vars[[var_name]] <- unit_data[[var_name]]
@@ -338,6 +398,7 @@ questionnaire_pogues_server <- function(id) {
           env_vars[[var_name]] <- val
           for (i in seq_along(val)) {
             v <- val[[i]]
+            # v peut être NULL, NA, scalaire ou vecteur ; seul le cas scalaire non-NA est sauvegardé
             if (length(v) == 1 && !is.null(v) && !is.na(v)) {
               save_response(db, eid, p$questionnaire_id, var_name, as.character(v), ligne = i, colonne = 1)
             }
@@ -395,6 +456,7 @@ questionnaire_pogues_server <- function(id) {
       enquete_id(NULL)
       current_module(NULL)
       unit_info_data(NULL)
+      original_vars(list())
       for (nm in names(env_vars)) env_vars[[nm]] <- NULL
     })
     observeEvent(input$btn_change_unit, {
@@ -404,10 +466,13 @@ questionnaire_pogues_server <- function(id) {
       db_path(NULL)
       enquete_id(NULL)
       current_module(NULL)
+      original_vars(list())
       for (nm in names(env_vars)) env_vars[[nm]] <- NULL
     })
 
     # Navigation
+    # Ordre des modules calculé une seule fois par changement pertinent puis
+    # réutilisé partout (au lieu d'appeler build_module_order() 4 fois).
     module_order <- reactive({
       p <- pogues()
       req(p)
@@ -438,195 +503,129 @@ questionnaire_pogues_server <- function(id) {
       }
     })
 
-    # ===========================================================================
-    # ACTION SUR UNE CELLULE (validation / restauration)
-    # ===========================================================================
-    
-    observeEvent(input$cell_action, {
-      action <- input$cell_action
-      req(action, action$action %in% c("validate", "reset"))
-      
-      var_name <- action$var
-      new_value <- action$value
-      a <- action$action
-      
-      p <- isolate(pogues())
-      db <- isolate(db_path())
-      eid <- isolate(enquete_id())
-      req(p, db, eid)
-      
-      if (a == "validate") {
-        env_vars[[var_name]] <- new_value
-        save_response(db, eid, p$questionnaire_id, var_name, new_value)
-      } else if (a == "reset") {
-        env_vars[[var_name]] <- new_value
-        save_response(db, eid, p$questionnaire_id, var_name, new_value)
-      }
-    })
-    
-    # ===========================================================================
-    # ACTION SUR UNE LIGNE (ajout / suppression)
-    # ===========================================================================
-    
-    observeEvent(input$row_action, {
-      action <- input$row_action
-      req(action, action$action %in% c("add", "delete"))
-      
-      q_name <- action$question
-      act <- action$action
-      
-      p <- isolate(pogues())
-      req(p)
-      
-      rcv <- table_row_count_var(q_name)
-      current_raw <- isolate(env_vars[[rcv]])
-      
-      # Convertir en numérique (toujours via caractère pour éviter le piège des facteurs)
-      if (is.factor(current_raw)) current_raw <- as.character(current_raw)
-      
-      current_num <- suppressWarnings(as.numeric(current_raw))
-      if (length(current_raw) == 0 || is.null(current_raw) || is.na(current_num) || current_raw == "") {
-        q <- NULL
-        for (mn in names(p$modules)) {
-          mod <- p$modules[[mn]]
-          if (!is.null(mod) && q_name %in% names(mod$questions)) {
-            q <- mod$questions[[q_name]]
-            break
-          }
-        }
-        req(q)
-        current_n <- get_table_base_n_rows(q, p, reactiveValuesToList(isolate(env_vars)))
-      } else {
-        current_n <- current_num
-      }
-      
-      # Garantie que c'est un entier
-      if (!is.numeric(current_n) || length(current_n) == 0 || is.na(current_n[1])) current_n <- 1
-      
-      if (act == "add") {
-        new_n <- current_n + 1
-        env_vars[[rcv]] <- as.character(new_n)
-        db <- isolate(db_path())
-        eid <- isolate(enquete_id())
-        if (!is.null(db) && !is.null(eid)) {
-          save_response(db, eid, p$questionnaire_id, rcv, as.character(new_n))
-        }
-      } else if (act == "delete") {
-        row_to_delete <- action$row
-        req(row_to_delete)
-        new_n <- max(1, current_n - 1)
-        env_vars[[rcv]] <- as.character(new_n)
-        db <- isolate(db_path())
-        eid <- isolate(enquete_id())
-        if (!is.null(db) && !is.null(eid)) {
-          save_response(db, eid, p$questionnaire_id, rcv, as.character(new_n))
-        }
-      }
-    })
-    
-    # ===========================================================================
-    # SAUVEGARDE DES MODIFICATIONS DE TABLEAUX
-    # ===========================================================================
-
-    observeEvent(input$table_modifications, {
-      modifications <- input$table_modifications
+    # Sauvegarde réponses
+    observe({
       p <- pogues()
       db <- db_path()
       eid <- enquete_id()
-
-      cat("\n=== SAUVEGARDE MODIFICATIONS TABLEAUX ===\n")
-      cat("Modifications reçues:", length(modifications), "\n")
-
-      if (is.null(modifications) || length(modifications) == 0) {
-        cat("Aucune modification à enregistrer\n")
-        showNotification("Aucune modification à enregistrer.", type = "warning")
-        return()
-      }
-
       if (is.null(p) || is.null(db) || is.null(eid)) {
-        cat("Contexte manquant: p=", !is.null(p), "db=", !is.null(db), "eid=", !is.null(eid), "\n")
-        showNotification("Erreur : contexte non disponible.", type = "error")
         return()
       }
+      for (var_name in names(p$variables)) {
+        inp <- paste0("q_", var_name)
+        val <- input[[inp]]
+        if (!is.null(val) && length(val) == 1) {
+          env_vars[[var_name]] <- as.character(val)
+          save_response(db, eid, p$questionnaire_id, var_name, as.character(val))
+        }
+      }
+      # NB : les cellules des tableaux ("TABLE") ne sont plus sauvegardées ici
+      # à chaque frappe. L'utilisateur doit cliquer sur le bouton "Valider"
+      # (ou "Rétablir") qui apparaît dans la cellule ; voir l'observeEvent sur
+      # input$cell_action ci-dessous.
+    })
 
-      results <- list(success = list(), error = list())
+    # Validation / restauration d'une cellule de tableau (bouton "Valider" ou
+    # "Rétablir" affiché dans la cellule par editable-table.js). Le payload
+    # JS contient : var (nom de variable), row, col, action ("validate" ou
+    # "reset") et value (valeur saisie, ou valeur d'origine pour un reset).
+    observeEvent(input$cell_action, {
+      info <- input$cell_action
+      req(info$var, info$action)
+      db <- db_path()
+      eid <- enquete_id()
+      p <- pogues()
+      req(db, eid, p)
 
-      # Traiter chaque modification
-      for (input_id in names(modifications)) {
-        tryCatch(
-          {
-            new_value <- as.character(modifications[[input_id]])
-            cat("Traitement:", input_id, "=", new_value, "\n")
+      row_idx <- suppressWarnings(as.numeric(info$row))
+      if (is.na(row_idx) || row_idx < 1) row_idx <- 1
+      col_idx <- suppressWarnings(as.numeric(info$col))
+      if (is.na(col_idx) || col_idx < 1) col_idx <- 1
 
-            # Parser l'ID : format tab_QNAME_ROW_COL
-            pattern <- "^tab_(.+)_(\\d+)_(\\d+)$"
-            if (grepl(pattern, input_id)) {
-              parts <- stringr::str_match(input_id, pattern)
-              qname <- parts[2]
-              row_idx <- as.numeric(parts[3])
-              col_idx <- as.numeric(parts[4])
-
-              cat("  Parsed: qname=", qname, "row=", row_idx, "col=", col_idx, "\n")
-
-              # Retrouver le nom de variable
-              found <- FALSE
-              for (mn in names(p$modules)) {
-                mod <- p$modules[[mn]]
-                if (is.null(mod)) next
-                if (!qname %in% names(mod$questions)) next
-
-                q <- mod$questions[[qname]]
-                if (q$type != "TABLE") next
-
-                vn <- get_table_var_name(q, row_idx, col_idx, p)
-                cat("  Variable trouvée:", vn, "\n")
-
-                # Sauvegarder en base de données
-                save_response(db, eid, p$questionnaire_id, vn, new_value, ligne = row_idx, colonne = col_idx)
-
-                # Mettre à jour env_vars
-                cur <- env_vars[[vn]]
-                if (is.null(cur) || !is.list(cur)) cur <- list()
-                while (length(cur) < row_idx) cur[[length(cur) + 1]] <- NA
-                cur[[row_idx]] <- new_value
-                env_vars[[vn]] <- cur
-
-                results$success[[input_id]] <- TRUE
-                found <- TRUE
-                break
-              }
-
-              if (!found) {
-                cat("  ERREUR: Question table non trouvée\n")
-                results$error[[input_id]] <- "Question table non trouvée"
-              }
-            } else {
-              cat("  ERREUR: ID ne correspond pas au pattern\n")
-              results$error[[input_id]] <- "Format d'ID invalide"
-            }
-          },
-          error = function(e) {
-            cat("  EXCEPTION:", as.character(e$message), "\n")
-            results$error[[input_id]] <<- as.character(e$message)
-          }
-        )
+      new_val <- if (identical(info$action, "reset")) {
+        get_variable_value(info$var, row_idx, original_vars())
+      } else {
+        info$value %||% ""
       }
 
-      # Retourner le statut au JavaScript
-      cat("Résultats: success=", length(results$success), "error=", length(results$error), "\n")
-      shinyjs::runjs(sprintf("window.applySaveResults(%s);", jsonlite::toJSON(results)))
+      cur <- env_vars[[info$var]]
+      if (is.null(cur) || !is.list(cur)) cur <- list()
+      while (length(cur) < row_idx) cur[[length(cur) + 1]] <- NA
+      cur[[row_idx]] <- as.character(new_val)
+      env_vars[[info$var]] <- cur
 
-      # Message de confirmation
-      nb_success <- length(results$success)
-      nb_error <- length(results$error)
-      if (nb_error == 0) {
-        msg <- paste0("✓ ", nb_success, " modification(s) enregistrée(s).")
-        showNotification(msg, type = "message")
-        cat(msg, "\n")
-      } else {
-        msg <- paste0("⚠ ", nb_success, " enregistrée(s), ", nb_error, " erreur(s).")
-        showNotification(msg, type = "warning")
-        cat(msg, "\n")
+      save_response(db, eid, p$questionnaire_id, info$var, as.character(new_val), ligne = row_idx, colonne = col_idx)
+    })
+
+    # Ajout / suppression de ligne dans un tableau ("Ajouter une ligne" /
+    # icône poubelle affichés par render_table_question). Le nombre de lignes
+    # effectif est mémorisé comme une réponse de plus (_NROWS_<question>) afin
+    # de survivre à la navigation entre modules et à un rechargement de page.
+    observeEvent(input$row_action, {
+      info <- input$row_action
+      req(info$question, info$action)
+      db <- db_path()
+      eid <- enquete_id()
+      p <- pogues()
+      req(db, eid, p)
+
+      q <- find_question_by_name(p, info$question)
+      req(q)
+
+      current_env <- reactiveValuesToList(env_vars)
+      nr <- get_table_n_rows(q, p, current_env)
+      dims <- get_table_dims(q)
+      nc <- length(dims$measure_dims)
+      req(nc > 0)
+      count_var <- table_row_count_var(info$question)
+
+      save_count <- function(n) {
+        env_vars[[count_var]] <- as.character(n)
+        save_response(db, eid, p$questionnaire_id, count_var, as.character(n))
+      }
+
+      set_cell <- function(var_name, row_idx, val) {
+        cur <- env_vars[[var_name]]
+        if (is.null(cur) || !is.list(cur)) cur <- list()
+        while (length(cur) < row_idx) cur[[length(cur) + 1]] <- NA
+        cur[[row_idx]] <- as.character(val)
+        env_vars[[var_name]] <- cur
+        save_response(db, eid, p$questionnaire_id, var_name, as.character(val), ligne = row_idx, colonne = 1)
+      }
+      # original_vars suit le même décalage : la ligne qui prend la place
+      # d'une autre hérite aussi de sa valeur d'origine (sinon la ligne
+      # décalée apparaîtrait à tort comme "corrigée").
+      set_original_cell <- function(var_name, row_idx, val) {
+        ov <- original_vars()
+        cur <- ov[[var_name]]
+        if (is.null(cur) || !is.list(cur)) cur <- list()
+        while (length(cur) < row_idx) cur[[length(cur) + 1]] <- NA
+        cur[[row_idx]] <- val
+        ov[[var_name]] <- cur
+        original_vars(ov)
+      }
+
+      if (identical(info$action, "add")) {
+        new_n <- nr + 1
+        save_count(new_n)
+      } else if (identical(info$action, "delete")) {
+        del_row <- suppressWarnings(as.numeric(info$row))
+        req(!is.na(del_row), del_row >= 1, del_row <= nr, nr > 1)
+        for (ci in seq_len(nc)) {
+          vn <- get_table_var_name(q, del_row, ci, p)
+          # décale vers le haut les lignes situées après la ligne supprimée
+          for (ri in del_row:(nr - 1)) {
+            next_vn <- get_table_var_name(q, ri + 1, ci, p)
+            set_cell(vn, ri, get_variable_value(next_vn, ri + 1, reactiveValuesToList(env_vars)))
+            set_original_cell(vn, ri, get_variable_value(next_vn, ri + 1, original_vars()))
+            vn <- next_vn
+          }
+          # vide la dernière ligne (désormais surnuméraire)
+          last_vn <- get_table_var_name(q, nr, ci, p)
+          set_cell(last_vn, nr, "")
+          set_original_cell(last_vn, nr, "")
+        }
+        save_count(nr - 1)
       }
     })
 
@@ -699,7 +698,7 @@ questionnaire_pogues_server <- function(id) {
       if (current_module() == "QUESTIONNAIRE_END") {
         render_fin_module(enquete_id())
       } else {
-        render_module(current_module(), p, reactiveValuesToList(env_vars))
+        render_module(current_module(), p, reactiveValuesToList(env_vars), original_vars_list = original_vars())
       }
     })
 

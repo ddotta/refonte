@@ -187,36 +187,53 @@ format_numeric <- function(val) {
   format(num, big.mark = " ", scientific = FALSE, trim = TRUE)
 }
 
+#' Compare une valeur courante à sa valeur d'origine (import), pour savoir si
+#' une cellule a été corrigée par l'utilisateur. Normalise les nombres
+#' (espaces, virgule/point) pour éviter les faux positifs de formatage.
+cell_value_differs <- function(current, original, is_numeric) {
+  a <- if (is.null(current)) "" else as.character(current)
+  b <- if (is.null(original)) "" else as.character(original)
+  if (is.na(a)) a <- ""
+  if (is.na(b)) b <- ""
+  if (is_numeric) {
+    na_ <- suppressWarnings(as.numeric(gsub(",", ".", gsub("[[:space:]]", "", a))))
+    nb_ <- suppressWarnings(as.numeric(gsub(",", ".", gsub("[[:space:]]", "", b))))
+    if (is.na(na_) && is.na(nb_)) return(FALSE)
+    if (is.na(na_) || is.na(nb_)) return(TRUE)
+    return(na_ != nb_)
+  }
+  trimws(a) != trimws(b)
+}
+
 # ==============================================================================
 # RENDU DES QUESTIONS TABLE
 # ==============================================================================
 
-render_table_question <- function(q, pogues, env_vars_list, input_prefix = "") {
-  q_name <- q$name
-  q_label <- resolve_vtl(q$label, env_vars_list)
-  
-  dims <- q$dimensions
+#' Extrait la dimension PRIMARY et les dimensions MEASURE d'une question TABLE
+get_table_dims <- function(q) {
   primary_dim <- NULL
   measure_dims <- list()
-  for (d in dims) {
+  for (d in q$dimensions) {
     if (d$type == "PRIMARY") primary_dim <- d
     if (d$type == "MEASURE") measure_dims <- append(measure_dims, list(d))
   }
-  
-  if (is.null(primary_dim) || length(measure_dims) == 0) {
-    return(div("Question tableau mal configurée: ", q_name))
-  }
-  
-  # Nombre de lignes : EXTERNAL > size > codelist > défaut
+  list(primary_dim = primary_dim, measure_dims = measure_dims)
+}
+
+#' Nombre de lignes "calculé" (EXTERNAL > size > codelist > défaut), sans tenir
+#' compte d'un éventuel ajout/suppression manuel de ligne par l'utilisateur.
+get_table_base_n_rows <- function(q, pogues, env_vars_list) {
+  dims <- get_table_dims(q)
+  primary_dim <- dims$primary_dim
   n_rows <- 3
   size_var_name <- NULL
   if (!is.null(primary_dim$size)) size_var_name <- primary_dim$size
   if (is.null(size_var_name)) {
-    ext_candidate <- paste0("NBLIGNES_TAB_", q_name)
+    ext_candidate <- paste0("NBLIGNES_TAB_", q$name)
     if (!is.null(env_vars_list[[ext_candidate]])) {
       size_var_name <- ext_candidate
     } else {
-      calc_candidate <- paste0("CALC_NBLIGNES_TAB_", q_name)
+      calc_candidate <- paste0("CALC_NBLIGNES_TAB_", q$name)
       if (!is.null(env_vars_list[[calc_candidate]])) size_var_name <- calc_candidate
     }
   }
@@ -228,6 +245,46 @@ render_table_question <- function(q, pogues, env_vars_list, input_prefix = "") {
     if (!is.null(cl)) n_rows <- length(cl)
   }
   if (is.na(n_rows) || n_rows < 1) n_rows <- 1
+  n_rows
+}
+
+#' Nom de la variable (interne, sauvegardée comme une réponse) qui stocke le
+#' nombre de lignes effectif d'une question TABLE, après ajout/suppression
+#' manuel par l'utilisateur via les boutons "Ajouter une ligne" / "Supprimer".
+table_row_count_var <- function(q_name) paste0("_NROWS_", q_name)
+
+#' Nombre de lignes effectif : la valeur "manuelle" (si l'utilisateur a ajouté
+#' ou supprimé une ligne) prévaut sur le nombre calculé.
+get_table_n_rows <- function(q, pogues, env_vars_list) {
+  base_n <- get_table_base_n_rows(q, pogues, env_vars_list)
+  override <- env_vars_list[[table_row_count_var(q$name)]]
+  if (!is.null(override) && !is.na(suppressWarnings(as.numeric(override)))) {
+    n <- as.numeric(override)
+    if (n >= 1) return(n)
+  }
+  base_n
+}
+
+render_table_question <- function(q, pogues, env_vars_list, input_prefix = "", original_vars_list = list()) {
+  q_name <- q$name
+  q_label <- resolve_vtl(q$label, env_vars_list)
+
+  # Nom (avec namespace) de l'input caché utilisé pour faire remonter les
+  # actions "valider" / "rétablir" faites sur une cellule (cf. editable-table.js).
+  # Une seule action-input pour toute l'appli : le payload transporte var/ligne/colonne.
+  domain <- getDefaultReactiveDomain()
+  cell_action_input <- if (!is.null(domain) && !is.null(domain$ns)) domain$ns("cell_action") else "cell_action"
+  row_action_input <- if (!is.null(domain) && !is.null(domain$ns)) domain$ns("row_action") else "row_action"
+  
+  dims <- get_table_dims(q)
+  primary_dim <- dims$primary_dim
+  measure_dims <- dims$measure_dims
+  
+  if (is.null(primary_dim) || length(measure_dims) == 0) {
+    return(div("Question tableau mal configurée: ", q_name))
+  }
+  
+  n_rows <- get_table_n_rows(q, pogues, env_vars_list)
   
   # Labels des colonnes
   col_labels <- sapply(measure_dims, function(d) {
@@ -275,7 +332,8 @@ render_table_question <- function(q, pogues, env_vars_list, input_prefix = "") {
     
     tags$table(class = "table table-bordered production-table editable-table",
       tags$thead(tags$tr(
-        lapply(col_labels, function(lbl) tags$th(HTML(lbl)))
+        lapply(col_labels, function(lbl) tags$th(HTML(lbl))),
+        tags$th("")
       )),
       tags$tbody(lapply(1:n_rows, function(row_idx) {
         tags$tr(
@@ -291,6 +349,22 @@ render_table_question <- function(q, pogues, env_vars_list, input_prefix = "") {
             # Valeur N-1 pour cette cellule
             n1_val <- NULL
             if (has_n1) n1_val <- get_n1_value(n1_data, var_name, row_idx)
+
+            # Valeur d'origine (import), figée dès le chargement de l'unité :
+            # sert à savoir si la cellule a été corrigée et à la restaurer.
+            original_val <- get_variable_value(var_name, row_idx, original_vars_list)
+            is_corrected <- nchar(original_val) > 0 && cell_value_differs(current_val, original_val, is_numeric)
+
+            # Indicateurs communs (numérique et caractère) : badge "C" + bouton
+            # de restauration, affichés seulement si la cellule a déjà été
+            # validée avec une valeur différente de l'import.
+            indicators <- div(class = "cell-indicators",
+              span(class = "modified-indicator", style = if (is_corrected) "" else "display:none;", "C"),
+              tags$a(href = "#", class = "reset-btn", style = if (is_corrected) "" else "display:none;",
+                title = "Rétablir la valeur initiale", tags$i(class = "fa fa-undo")),
+              tags$a(href = "#", class = "validate-btn", style = "display:none;",
+                title = "Valider la modification", tags$i(class = "fa fa-check"))
+            )
             
             if (is_numeric) {
               unit_label <- if (!is.null(var_info) && !is.na(var_info$unit)) {
@@ -300,27 +374,58 @@ render_table_question <- function(q, pogues, env_vars_list, input_prefix = "") {
               raw_val <- if (!is.na(num_val)) as.character(num_val) else ""
               formatted_val <- if (!is.na(num_val)) format_numeric(num_val) else ""
               
-              tags$td(class = "numeric-cell",
-                `data-original` = raw_val,
+              tags$td(class = paste("numeric-cell", if (is_corrected) "cell-corrected" else ""),
+                `data-original` = original_val,
+                `data-saved` = raw_val,
+                `data-var` = var_name,
+                `data-row` = row_idx,
+                `data-col` = col_idx,
+                `data-action-input` = cell_action_input,
                 div(class = "cell-content",
                   textInput(input_id, NULL, value = raw_val, width = "100%"),
-                  div(class = "cell-indicators",
-                    span(class = "modified-indicator", style = "display: none;", "C"),
-                    HTML('<a href="#" class="reset-btn" style="display:none;" title="Rétablir la valeur initiale"><i class="fa fa-undo"></i></a>')
-                  )
+                  indicators
                 ),
                 if (unit_label != "") div(class = "cell-unit", unit_label),
                 if (!is.null(n1_val)) div(class = "n1-value", paste0("N-1: ", format_numeric(n1_val)))
               )
             } else {
-              tags$td(
-                textInput(input_id, NULL, value = current_val, width = "150px"),
+              tags$td(class = paste("text-cell", if (is_corrected) "cell-corrected" else ""),
+                `data-original` = original_val,
+                `data-saved` = current_val,
+                `data-var` = var_name,
+                `data-row` = row_idx,
+                `data-col` = col_idx,
+                `data-action-input` = cell_action_input,
+                div(class = "cell-content",
+                  textInput(input_id, NULL, value = current_val, width = "150px"),
+                  indicators
+                ),
                 if (!is.null(n1_val)) div(class = "n1-value", paste0("N-1: ", as.character(n1_val)))
               )
             }
-          })
+          }),
+          # Colonne "actions" : suppression de la ligne (désactivée s'il ne
+          # reste qu'une seule ligne, pour toujours garder au moins une ligne)
+          tags$td(class = "row-actions",
+            if (n_rows > 1) {
+              tags$a(href = "#", class = "delete-row-btn", title = "Supprimer cette ligne",
+                onclick = sprintf(
+                  "if(confirm('Supprimer cette ligne ?')){Shiny.setInputValue('%s',{question:'%s',action:'delete',row:%d,ts:Date.now()},{priority:'event'});} return false;",
+                  row_action_input, q_name, row_idx
+                ),
+                tags$i(class = "fa fa-trash"))
+            }
+          )
         )
       }))
+    ),
+    div(style = "margin-top: 8px;",
+      tags$a(href = "#", class = "btn btn-default btn-sm add-row-btn",
+        onclick = sprintf(
+          "Shiny.setInputValue('%s',{question:'%s',action:'add',ts:Date.now()},{priority:'event'}); return false;",
+          row_action_input, q_name
+        ),
+        tags$i(class = "fa fa-plus"), " Ajouter une ligne")
     ),
     
     # Contrôles
@@ -337,14 +442,14 @@ render_table_question <- function(q, pogues, env_vars_list, input_prefix = "") {
 }
 
 #' Rendu d'un module complet
-render_module <- function(module_name, pogues, env_vars_list, input_prefix = "") {
+render_module <- function(module_name, pogues, env_vars_list, input_prefix = "", original_vars_list = list()) {
   mod <- pogues$modules[[module_name]]
   if (is.null(mod)) return(h3("Module non trouvé : ", module_name))
   tagList(lapply(names(mod$questions), function(q_name) {
     q <- mod$questions[[q_name]]
     input_type <- get_input_type(q$type, pogues$variables[[q_name]])
     if (input_type == "table") {
-      render_table_question(q, pogues, env_vars_list, input_prefix)
+      render_table_question(q, pogues, env_vars_list, input_prefix, original_vars_list)
     } else if (input_type %in% c("radio", "checkbox")) {
       render_choice_question(q, pogues, env_vars_list, input_prefix)
     } else if (input_type == "submodule") {
