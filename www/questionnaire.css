@@ -25,7 +25,7 @@
 .shiny-notification { position: fixed; top: 10px; right: 10px; z-index: 99999; }
 
 /* ==============================================================================
-   STYLES POUR TABLEAUX ÉDITABLES AVEC AFFICHAGE FORMATÉ
+   STYLES POUR TABLEAUX EDITABLES AVEC AFFICHAGE FORMATE
    ============================================================================== */
 .editable-table .numeric-cell,
 .editable-table .text-cell {
@@ -39,20 +39,11 @@
   min-height: 34px;
 }
 
-/* Le Shiny textInput est toujours présent et fonctionnel */
-.editable-table .numeric-cell .cell-content .shiny-text-input,
-.editable-table .text-cell .cell-content .shiny-text-input {
-  width: 100%;
-  margin: 0;
-}
-
-.editable-table .numeric-cell .cell-content .shiny-text-input .form-group,
-.editable-table .text-cell .cell-content .shiny-text-input .form-group {
-  margin-bottom: 0;
-}
-
-.editable-table .numeric-cell .cell-content .shiny-text-input input,
-.editable-table .text-cell .cell-content .shiny-text-input input {
+/* Le textInput Shiny genere : div.shiny-input-container > input.form-control */
+/* On cible directement l'input pour que les styles s'appliquent quel que soit */
+/* le wrapper Shiny.                                                           */
+.editable-table .numeric-cell .cell-content input[type="text"],
+.editable-table .text-cell .cell-content input[type="text"] {
   font-size: 14px;
   height: 34px;
   padding: 4px 48px 4px 6px;
@@ -61,21 +52,27 @@
   background: #fff;
 }
 
-.editable-table .numeric-cell .cell-content .shiny-text-input input {
+.editable-table .numeric-cell .cell-content input[type="text"] {
   text-align: right;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 
-.editable-table .numeric-cell .cell-content .shiny-text-input input:focus,
-.editable-table .text-cell .cell-content .shiny-text-input input:focus {
+/* Supprimer la marge du form-group Shiny */
+.editable-table .numeric-cell .cell-content .form-group,
+.editable-table .text-cell .cell-content .form-group {
+  margin-bottom: 0;
+}
+
+/* Focus */
+.editable-table .numeric-cell .cell-content input[type="text"]:focus,
+.editable-table .text-cell .cell-content input[type="text"]:focus {
   border-color: #2c3e50;
   box-shadow: inset 0 1px 1px rgba(0,0,0,.075), 0 0 4px rgba(44,62,80,.3);
 }
 
-/* Indicateurs affichés à droite dans la cellule */
-.editable-table .numeric-cell .cell-indicators,
-.editable-table .text-cell .cell-indicators {
+/* Indicateurs affiches a droite dans la cellule */
+.editable-table .cell-indicators {
   position: absolute;
   top: 0;
   right: 4px;
@@ -84,7 +81,7 @@
   align-items: center;
   gap: 3px;
   pointer-events: none;
-  z-index: 1;
+  z-index: 10;
 }
 
 .editable-table .cell-indicators .modified-indicator {
@@ -104,6 +101,7 @@
   padding: 0 2px;
   cursor: pointer;
   line-height: 16px;
+  text-decoration: none;
 }
 
 .editable-table .cell-indicators .reset-btn:hover {
@@ -111,8 +109,8 @@
   text-decoration: none !important;
 }
 
-/* Bouton "Valider" : apparaît dès qu'une valeur saisie n'est pas encore
-   enregistrée en base. Cliquer dessus déclenche la sauvegarde. */
+/* Bouton "Valider" : apparait des qu'une valeur saisie n'est pas encore */
+/* enregistree en base. Cliquer dessus declenche la sauvegarde.          */
 .editable-table .cell-indicators .validate-btn {
   pointer-events: auto;
   font-size: 12px;
@@ -122,6 +120,7 @@
   padding: 1px 4px;
   cursor: pointer;
   line-height: 16px;
+  text-decoration: none;
 }
 
 .editable-table .cell-indicators .validate-btn:hover {
@@ -135,44 +134,46 @@
   margin-top: 2px;
 }
 
-/* Cellule avec une saisie non encore validée */
+/* ============== ETATS VISUELS DES CELLULES ============== */
+
+/* Cellule avec une saisie non encore validee (fond vert) */
 .editable-table .pending-edit {
   background-color: #eafaf1 !important;
 }
 
-.editable-table .pending-edit input {
+.editable-table .pending-edit input[type="text"] {
   background-color: #eafaf1 !important;
   border-color: #82c99a !important;
 }
 
-/* Cellule corrigée (valeur enregistrée différente de l'import) */
-.editable-table .numeric-cell.modified,
-.editable-table .text-cell.modified {
+/* Cellule corrigee (valeur enregistree differe de l'import) : fond jaune */
+.editable-table td.modified {
   background-color: #fef9e7 !important;
 }
 
-.editable-table .numeric-cell.modified input,
-.editable-table .text-cell.modified input {
+.editable-table td.modified input[type="text"] {
   background-color: #fef9e7 !important;
   border-color: #e8d5a3;
 }
-.shiny-notification { position: fixed; top: 10px; right: 10px; z-index: 99999; }
 
-/* Colonne "actions" (icône de suppression de ligne) */
+/* Colonne "actions" (icone de suppression de ligne) */
 .editable-table td.row-actions {
   width: 32px;
   text-align: center;
   vertical-align: middle;
 }
+
 .editable-table .delete-row-btn {
   color: #e74c3c;
   cursor: pointer;
   font-size: 13px;
 }
+
 .editable-table .delete-row-btn:hover {
   color: #c0392b;
   text-decoration: none;
 }
+
 .questionnaire-module .add-row-btn {
   display: inline-block;
 }
