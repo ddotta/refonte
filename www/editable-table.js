@@ -1,191 +1,214 @@
 // ==============================================================================
-// GESTION DES TABLEAUX ÉDITABLES AVEC AFFICHAGE FORMATÉ
+// GESTION DES TABLEAUX EDITABLES - VERSION SIMPLIFIEE
 // ==============================================================================
-// Fonctionnalités :
-// - Affichage formaté des valeurs numériques (séparateur de milliers)
-// - Édition directe dans le champ (numérique ou caractère)
-// - Détection d'une saisie non enregistrée -> bouton "Valider"
+// Fonctionnalites :
+// - Affichage formaté des valeurs numeriques (separateur de milliers)
+// - Edition directe dans le champ (numerique ou caractere)
+// - Detection d'une saisie non enregistrée -> bouton "Valider"
 // - Validation explicite : envoie la valeur au serveur pour sauvegarde en base
-// - Une fois validée, si la valeur diffère de la valeur d'origine (import) :
-//   badge "C" (corrigé) + bouton de restauration de la valeur initiale
-// - L'état "corrigé" est calculé côté serveur à chaque rendu (data-original /
-//   data-saved), donc il reste visible si on change de module et qu'on revient
+// - Une fois validee, si la valeur differe de la valeur d'origine (import) :
+//   badge "C" (corrige) + bouton de restauration de la valeur initiale
+//
+// Approche : délégation d'evenements (un seul listener global par type
+// d'evenement) pour plus de robustesse face aux re-rendus DOM de Shiny.
 // ==============================================================================
 
 (function() {
   'use strict';
 
-  console.debug('[editable-table] script chargé (version avec bouton Valider + ajout/suppression de lignes)');
+  console.log('[editable-table] script charge (version simplifiee)');
 
-  // Formate un nombre avec séparateur de milliers (espace)
-  function formatNumber(str) {
-    if (str === null || str === undefined || str === '') return '';
-    var cleaned = String(str).replace(/\s/g, '').replace(',', '.');
-    var num = parseFloat(cleaned);
-    if (isNaN(num)) return String(str);
-    return num.toLocaleString('fr-FR', {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 10,
-      useGrouping: true
-    }).replace(/\u202f/g, ' ').replace(/,/g, ',');
-  }
+  // ===== Utilitaires =====
 
-  // Supprime les séparateurs de milliers pour obtenir la valeur brute
-  function unformatNumber(str) {
-    if (str === null || str === undefined) return '';
-    return String(str).replace(/\s/g, '').replace(',', '.');
-  }
-
-  // Normalise une valeur pour comparaison (numérique ou caractère)
   function normalize(str, isNumeric) {
-    if (isNumeric) return unformatNumber(str);
-    return (str === null || str === undefined) ? '' : String(str).trim();
+    if (str === null || str === undefined) return '';
+    if (isNumeric) return String(str).replace(/\s/g, '').replace(',', '.');
+    return String(str).trim();
   }
 
-  // Initialise une cellule éditable (numérique ou caractère)
-  function initEditableCell(cell) {
+  function cleanNumericInput(input) {
+    if (!input) return;
+    var val = input.value.replace(/\s/g, '').replace(',', '.');
+    var num = parseFloat(val);
+    if (!isNaN(num) && val !== '') {
+      input.value = String(num);
+    } else if (val === '') {
+      input.value = '';
+    }
+  }
+
+  // ===== Mise à jour visuelle d'une cellule =====
+
+  function updateCellState(cell) {
     var input = cell.querySelector('input[type="text"]');
     if (!input) return;
 
-    var indicatorEl = cell.querySelector('.modified-indicator');
-    var resetBtn = cell.querySelector('.reset-btn');
     var validateBtn = cell.querySelector('.validate-btn');
-    var isNumeric = cell.classList.contains('numeric-cell');
-
+    var indicatorEl = cell.querySelector('.modified-indicator');
+    var resetBtn    = cell.querySelector('.reset-btn');
+    var savedValue  = cell.getAttribute('data-saved')   || '';
     var originalValue = cell.getAttribute('data-original') || '';
-    // savedValue = valeur actuellement enregistrée en base (mise à jour
-    // localement après un clic sur Valider/Rétablir, sans attendre un re-rendu)
-    var savedValue = cell.getAttribute('data-saved') || '';
-    var varName = cell.getAttribute('data-var');
-    var rowIdx = cell.getAttribute('data-row');
-    var colIdx = cell.getAttribute('data-col');
+    var isNumeric   = cell.classList.contains('numeric-cell');
+
+    var currentVal  = input.value;
+    var pending     = normalize(currentVal, isNumeric) !== normalize(savedValue, isNumeric);
+    var corrected   = normalize(savedValue, isNumeric) !== normalize(originalValue, isNumeric);
+
+    // Bouton Valider  : visible si saisie non enregistree
+    if (validateBtn) validateBtn.style.display = pending   ? 'inline-flex' : 'none';
+    // Badge "C"       : visible si corrigé et pas en cours de saisie
+    if (indicatorEl) indicatorEl.style.display = (corrected && !pending) ? 'inline'      : 'none';
+    // Bouton Retablir : visible si corrigé et pas en cours de saisie
+    if (resetBtn)    resetBtn.style.display    = (corrected && !pending) ? 'inline-flex' : 'none';
+
+    cell.classList.toggle('modified',     corrected && !pending);
+    cell.classList.toggle('pending-edit', pending);
+  }
+
+  function initAllCells() {
+    document.querySelectorAll('td[data-var]').forEach(function(cell) {
+      updateCellState(cell);
+    });
+  }
+
+  // ===== Envoi d'action au serveur Shiny =====
+
+  function sendAction(cell, action, value) {
     var actionInputId = cell.getAttribute('data-action-input');
+    var varName       = cell.getAttribute('data-var');
+    var rowIdx        = cell.getAttribute('data-row');
+    var colIdx        = cell.getAttribute('data-col');
 
-    function isPending() {
-      return normalize(input.value, isNumeric) !== normalize(savedValue, isNumeric);
-    }
-    function isCorrected() {
-      return normalize(savedValue, isNumeric) !== normalize(originalValue, isNumeric);
-    }
-
-    // Met à jour l'affichage des indicateurs : bouton Valider si saisie non
-    // enregistrée ; sinon badge "C" + bouton Rétablir si la valeur enregistrée
-    // diffère de la valeur d'origine.
-    function updateIndicators() {
-      var pending = isPending();
-      var corrected = isCorrected();
-
-      if (validateBtn) validateBtn.style.display = pending ? 'inline-block' : 'none';
-      if (indicatorEl) indicatorEl.style.display = (corrected && !pending) ? 'inline' : 'none';
-      if (resetBtn) resetBtn.style.display = (corrected && !pending) ? 'inline-block' : 'none';
-
-      cell.classList.toggle('modified', corrected && !pending);
-      cell.classList.toggle('pending-edit', pending);
+    if (!actionInputId || typeof Shiny === 'undefined') {
+      console.warn('[editable-table] Shiny indisponible ou action-input manquant');
+      return;
     }
 
-    // Formate la valeur avec séparateurs de milliers (uniquement numérique)
-    function formatDisplay() {
-      if (!isNumeric) return;
-      var cleaned = unformatNumber(input.value);
-      var num = parseFloat(cleaned);
-      if (!isNaN(num) && cleaned !== '') {
-        input.value = cleaned;
-      } else if (cleaned === '') {
-        input.value = '';
-      }
+    Shiny.setInputValue(actionInputId, {
+      var:    varName,
+      row:    rowIdx,
+      col:    colIdx,
+      action: action,
+      value:  value,
+      ts:     Date.now()
+    }, { priority: 'event' });
+
+    console.log('[editable-table] action envoyee :', action, varName, '=', value);
+  }
+
+  function handleValidate(cell) {
+    var input = cell.querySelector('input[type="text"]');
+    if (!input) return;
+
+    // Nettoyer la valeur numerique avant sauvegarde
+    if (cell.classList.contains('numeric-cell')) {
+      cleanNumericInput(input);
     }
 
-    // Envoie une action ("validate" ou "reset") au serveur Shiny
-    function sendAction(action, value) {
-      if (!actionInputId || typeof Shiny === 'undefined') return;
-      Shiny.setInputValue(actionInputId, {
-        var: varName, row: rowIdx, col: colIdx,
-        action: action, value: value, ts: Date.now()
-      }, { priority: 'event' });
-    }
+    var valueToSave = input.value;
+    cell.setAttribute('data-saved', valueToSave);
 
-    // Clic sur "Valider" : envoie la valeur saisie, elle devient la nouvelle
-    // valeur enregistrée
+    sendAction(cell, 'validate', valueToSave);
+    updateCellState(cell);
+  }
+
+  function handleReset(cell) {
+    var input         = cell.querySelector('input[type="text"]');
+    var originalValue = cell.getAttribute('data-original') || '';
+
+    if (input) input.value = originalValue;
+    cell.setAttribute('data-saved', originalValue);
+
+    sendAction(cell, 'reset', originalValue);
+    updateCellState(cell);
+  }
+
+  // ===== Écouteurs d'evenements (délégation) =====
+
+  // Clic sur les boutons Valider / Retablir
+  document.addEventListener('click', function(e) {
+    var validateBtn = e.target.closest('.validate-btn');
     if (validateBtn) {
-      validateBtn.addEventListener('click', function(e) {
-        e.stopPropagation();
-        e.preventDefault();
-        formatDisplay();
-        savedValue = input.value;
-        cell.setAttribute('data-saved', savedValue);
-        sendAction('validate', savedValue);
-        updateIndicators();
-      });
+      e.preventDefault();
+      e.stopPropagation();
+      var cell = validateBtn.closest('td[data-var]');
+      if (cell) handleValidate(cell);
+      return;
     }
 
-    // Clic sur le bouton reset : restaurer la valeur initiale et l'enregistrer
+    var resetBtn = e.target.closest('.reset-btn');
     if (resetBtn) {
-      resetBtn.addEventListener('click', function(e) {
-        e.stopPropagation();
-        e.preventDefault();
-        input.value = originalValue;
-        savedValue = originalValue;
-        cell.setAttribute('data-saved', savedValue);
-        sendAction('reset', originalValue);
-        updateIndicators();
-      });
+      e.preventDefault();
+      e.stopPropagation();
+      var cell = resetBtn.closest('td[data-var]');
+      if (cell) handleReset(cell);
+      return;
     }
-
-    // Détection de saisie en temps réel (fait apparaître/disparaître "Valider")
-    input.addEventListener('input', function() {
-      updateIndicators();
-    });
-
-    // Perte de focus : nettoyer l'affichage numérique
-    input.addEventListener('blur', function() {
-      formatDisplay();
-      updateIndicators();
-    });
-
-    // Validation au clavier (Entrée) sans quitter le champ
-    input.addEventListener('keydown', function(e) {
-      if (e.key === 'Enter' && validateBtn && isPending()) {
-        e.preventDefault();
-        validateBtn.click();
-      }
-    });
-
-    // Initialisation
-    updateIndicators();
-  }
-
-  // Initialise toutes les cellules éditables pas encore initialisées
-  function init() {
-    var cells = document.querySelectorAll('.editable-table td[data-var]:not(.initialized)');
-    if (cells.length > 0) {
-      console.debug('[editable-table] initialisation de', cells.length, 'cellule(s)');
-    }
-    cells.forEach(function(cell) {
-      try {
-        initEditableCell(cell);
-      } catch (err) {
-        console.error('[editable-table] erreur d\'initialisation sur une cellule', err, cell);
-      }
-      cell.classList.add('initialized');
-    });
-  }
-
-  // Observer les mutations du DOM (tableaux chargés/rechargés dynamiquement,
-  // par ex. en changeant de module puis en revenant)
-  var observer = new MutationObserver(function() {
-    init();
   });
 
-  observer.observe(document.body, {
-    childList: true,
-    subtree: true
+  // Saisie dans les inputs -> met a jour l'etat visuel en temps reel
+  document.addEventListener('input', function(e) {
+    var cell = e.target.closest('td[data-var]');
+    if (cell) updateCellState(cell);
   });
 
-  // Initialisation initiale
+  // Perte de focus -> nettoyage numerique + mise a jour visuelle
+  document.addEventListener('focusout', function(e) {
+    var cell = e.target.closest('td[data-var]');
+    if (!cell) return;
+
+    if (cell.classList.contains('numeric-cell')) {
+      cleanNumericInput(e.target);
+    }
+    updateCellState(cell);
+  });
+
+  // Touche Entree = Valider (si un bouton Valider est visible)
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') {
+      var cell = e.target.closest('td[data-var]');
+      if (!cell) return;
+      var validateBtn = cell.querySelector('.validate-btn');
+      if (validateBtn && validateBtn.style.display !== 'none') {
+        e.preventDefault();
+        handleValidate(cell);
+      }
+    }
+  });
+
+  // ===== Initialisation =====
+
+  function start() {
+    initAllCells();
+    console.log('[editable-table] initialisation terminee');
+  }
+
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
+    document.addEventListener('DOMContentLoaded', start);
   } else {
-    init();
+    start();
   }
+
+  // Observer les changements DOM (Shiny re-rend les tableaux quand on
+  // change de module ou quand les donnees changent)
+  var observer = new MutationObserver(function(mutations) {
+    var needsInit = false;
+    mutations.forEach(function(m) {
+      if (m.type !== 'childList') return;
+      for (var i = 0; i < m.addedNodes.length; i++) {
+        var node = m.addedNodes[i];
+        if (node.nodeType !== 1) continue;
+        if (node.matches && node.matches('td[data-var]')) {
+          needsInit = true; break;
+        }
+        if (node.querySelectorAll && node.querySelectorAll('td[data-var]').length > 0) {
+          needsInit = true; break;
+        }
+      }
+    });
+    if (needsInit) initAllCells();
+  });
+
+  observer.observe(document.body, { childList: true, subtree: true });
 
 })();
