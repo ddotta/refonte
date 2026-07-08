@@ -749,6 +749,28 @@ questionnaire_pogues_server <- function(id) {
         )
       )
     })
+    output$module_selector_ui <- renderUI({
+      p <- pogues()
+      req(p)
+      mods <- names(p$modules)
+      mods <- mods[mods != "QUESTIONNAIRE_END"]
+      labels <- sapply(mods, function(mn) {
+        mi <- p$modules[[mn]]
+        if (!is.null(mi)) mi$label %||% mn else mn
+      })
+      current <- current_module()
+      selectInput(session$ns("module_selector"), NULL,
+        choices = setNames(mods, labels),
+        selected = if (!is.null(current) && current %in% mods) current else mods[1],
+        width = "100%"
+      )
+    })
+    
+    observeEvent(input$module_selector, {
+      req(input$module_selector)
+      current_module(input$module_selector)
+    })
+    
     output$progress_bar <- renderUI({
       req(pogues(), current_module())
       order <- module_order()
@@ -829,25 +851,30 @@ questionnaire_pogues_server <- function(id) {
       if (unit_selected() && !is.null(p)) {
         return(fluidPage(
           div(
-            style = "text-align: center; padding: 15px 0; border-bottom: 2px solid #2c3e50; margin-bottom: 20px;",
-            h2(p$label, style = "color: #2c3e50; margin: 0;"), h5(p$owner, style = "color: #7f8c8d;"),
-            h6(paste0("Enquete : ", enquete_id()), style = "color: #95a5a6;"),
-            actionLink(session$ns("btn_change_unit"), "Changer d'unite", style = "font-size: 12px; text-decoration: underline; cursor: pointer; margin-right: 15px;"),
-            actionLink(session$ns("btn_change_survey"), "Changer d'enquete", style = "font-size: 12px; text-decoration: underline; cursor: pointer;")
+            style = "padding: 8px 0; border-bottom: 2px solid #2c3e50; margin-bottom: 10px;",
+            fluidRow(
+              column(6,
+                h4(p$label, style = "color: #2c3e50; margin: 0; font-size: 16px;"),
+                h6(paste0(enquete_id()), style = "color: #95a5a6; margin:0;")
+              ),
+              column(6, style = "text-align:right;",
+                actionLink(session$ns("btn_change_unit"), "Changer d'unite", style = "font-size: 11px; text-decoration: underline; cursor: pointer; margin-right: 10px;"),
+                actionLink(session$ns("btn_change_survey"), "Changer d'enquete", style = "font-size: 11px; text-decoration: underline; cursor: pointer;")
+              )
+            )
           ),
           uiOutput(session$ns("unit_address_panel")),
-          div(class = "progress-bar-custom", uiOutput(session$ns("progress_bar"))),
+          # Navigation horizontale pleine largeur (remplace la sidebar gauche)
           fluidRow(
-            column(3, div(class = "sidebar-nav", uiOutput(session$ns("nav_sidebar")))),
-            column(
-              9,
-              uiOutput(session$ns("module_indicator")), uiOutput(session$ns("main_content")),
-              div(class = "nav-buttons", fluidRow(
-                column(6, uiOutput(session$ns("prev_button"))),
-                column(6, uiOutput(session$ns("next_button")), align = "right")
-              ))
-            )
-          )
+            column(10, uiOutput(session$ns("module_selector_ui"))),
+            column(2, uiOutput(session$ns("progress_bar")))
+          ),
+          uiOutput(session$ns("module_indicator")),
+          uiOutput(session$ns("main_content")),
+          div(class = "nav-buttons", fluidRow(
+            column(6, uiOutput(session$ns("prev_button"))),
+            column(6, uiOutput(session$ns("next_button")), align = "right")
+          ))
         ))
       }
       div(class = "loading-container", icon("spinner", class = "fa-spin fa-3x"), h3("Chargement..."))

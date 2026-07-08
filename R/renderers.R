@@ -448,7 +448,7 @@ render_table_question <- function(q, pogues, env_vars_list, input_prefix = "", o
               formatted_val <- if (!is.na(num_val)) format_numeric(num_val) else ""
 
               tags$td(
-                class = paste("numeric-cell", if (is_corrected) "cell-corrected" else ""),
+                class = paste("numeric-cell", if (is_corrected) "modified" else ""),
                 `data-original` = original_val,
                 `data-saved` = raw_val,
                 `data-var` = var_name,
@@ -466,7 +466,7 @@ render_table_question <- function(q, pogues, env_vars_list, input_prefix = "", o
               )
             } else {
               tags$td(
-                class = paste("text-cell", if (is_corrected) "cell-corrected" else ""),
+                class = paste("text-cell", if (is_corrected) "modified" else ""),
                 `data-original` = original_val,
                 `data-saved` = current_val,
                 `data-var` = var_name,
@@ -512,18 +512,19 @@ render_table_question <- function(q, pogues, env_vars_list, input_prefix = "", o
         tags$i(class = "fa fa-plus"), " Ajouter une ligne"
       ),
       HTML("&nbsp;"),
-      tags$a(
-        href = "#", class = "btn btn-primary btn-sm save-table-btn",
+      tags$button(
+        type = "button", class = "btn btn-success btn-sm save-table-btn",
+        style = "font-weight: 600; padding: 6px 16px; font-size: 14px;",
         `data-input-id` = sprintf("%s", if (!is.null(domain$ns)) domain$ns("table_modifications") else "table_modifications"),
         tags$i(class = "fa fa-floppy-o"), " Enregistrer les modifications"
       )
     ),
 
-    # Contrôles
+    # Contrôles - filtrer les messages superflus (type "Merci de saisir")
     if (length(q$controls) > 0) {
       lapply(q$controls, function(ctl) {
         msg <- resolve_vtl(ctl$fail_message, env_vars_list)
-        if (msg != "") {
+        if (msg != "" && !grepl("Merci de saisir|merci de saisir", msg)) {
           css <- if (ctl$criticity == "ERROR") "control-error" else "control-warn"
           div(class = css, HTML(gsub("\r\n", "<br>", msg)))
         }
