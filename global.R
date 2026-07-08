@@ -39,7 +39,8 @@ library(shinybusy)
 source("R/vtl.R", local = TRUE)
 source("R/load_pogues.R", local = TRUE)
 source("R/import_data.R", local = TRUE)
-source("R/renderers.R", local = TRUE)
+# renderers.R expose des fonctions utilisées par d'autres modules => charger dans globalenv
+source("R/renderers.R")
 
 # Modules SUIVAL IAA
 source("R/traitement_anomalies.R", local = TRUE)
@@ -52,7 +53,6 @@ source("R/database.R", local = TRUE)
 # ==============================================================================
 # Sources des modules UI/Server
 # ==============================================================================
-
 # Header et Sidebar (définis dans app.R pour la clarté)
 # Les modules fonctionnels sont chargés dans app.R via source()
 

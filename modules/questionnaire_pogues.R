@@ -116,7 +116,7 @@ get_table_var_name <- function(q, row_idx, col_idx, pogues) {
 questionnaire_pogues_server <- function(id) {
   moduleServer(id, function(input, output, session) {
     survey_selected <- reactiveVal(FALSE)
-    survey_name <- reactiveVal(NULL)
+    survey_key <- reactiveVal(NULL)   # anciennement survey_name
     show_info <- reactiveVal(FALSE)
     unit_selected <- reactiveVal(FALSE)
     selected_unit_id <- reactiveVal(NULL)
@@ -125,16 +125,17 @@ questionnaire_pogues_server <- function(id) {
     enquete_id <- reactiveVal(NULL)
     current_module <- reactiveVal(NULL)
     env_vars <- reactiveValues()
+    original_vars <- reactiveVal(list())   # valeurs d'origine (import) pour détecter les corrections
     unit_info_data <- reactiveVal(NULL)
     unit_overrides <- reactiveVal(list())
     unit_panel_refresh <- reactiveVal(0)
 
     observe({
-      for (survey_key in names(AVAILABLE_SURVEYS)) {
-        btn_name <- paste0("select_", survey_key)
+      for (sk in names(AVAILABLE_SURVEYS)) {
+        btn_name <- paste0("select_", sk)
         if (!is.null(input[[btn_name]]) && input[[btn_name]] > 0) {
           survey_selected(TRUE)
-          survey_name(survey_key)
+          survey_key(sk)
           show_info(TRUE)
           break
         }
@@ -148,7 +149,7 @@ questionnaire_pogues_server <- function(id) {
     })
 
     units_r <- reactive({
-      name <- survey_name()
+      name <- survey_key()
       req(name)
       list_survey_units(name)
     })
@@ -186,7 +187,7 @@ questionnaire_pogues_server <- function(id) {
       if (!is.null(unit_id) && unit_id != "") {
         selected_unit_id(unit_id)
         unit_selected(TRUE)
-        name <- survey_name()
+        name <- survey_key()
         ui <- get_unit_info_from_rem(name, unit_id)
         if (!is.null(ui) && nrow(ui) > 0) {
           ov <- unit_overrides()[[unit_id]]
@@ -240,11 +241,11 @@ questionnaire_pogues_server <- function(id) {
 
     output$btn_download_csv <- downloadHandler(
       filename = function() {
-        n <- survey_name()
+        n <- survey_key()
         if (is.null(n)) "export.csv" else paste0("interrogations_", n, ".csv")
       },
       content = function(file) {
-        n <- survey_name()
+        n <- survey_key()
         if (is.null(n)) {
           return()
         }
@@ -310,7 +311,7 @@ questionnaire_pogues_server <- function(id) {
 
     # Chargement questionnaire
     observe({
-      name <- survey_name()
+      name <- survey_key()
       uid <- selected_unit_id()
       if (is.null(name) || is.null(uid)) {
         return()
@@ -324,16 +325,40 @@ questionnaire_pogues_server <- function(id) {
       db <- paste0(tolower(p$name), "_questionnaire.db")
       db_path(db)
       init_db(db)
-      eid <- paste0(p$name, "_", uid, "_", format(Sys.time(), "%Y%m%d_%H%M%S"))
+      
+      # --- Rechercher un enquete_id existant pour cette paire (p$name, uid) ---
+      # format attendu : <p$name>_<uid>_...
+      con <- DBI::dbConnect(RSQLite::SQLite(), db)
+      pref <- paste0(p$name, "_", uid, "_%")
+      
+      existing <- tryCatch({
+        DBI::dbGetQuery(con,
+          "SELECT id FROM enquetes WHERE id LIKE :pref ORDER BY updated_at DESC LIMIT 1",
+          params = list(pref = pref))
+      }, error = function(e) data.frame(id = character(0), stringsAsFactors = FALSE))
+      
+      DBI::dbDisconnect(con)
+      
+      if (nrow(existing) > 0 && nzchar(existing$id[1])) {
+        eid <- existing$id[1]
+      } else {
+        eid <- paste0(p$name, "_", uid, "_", format(Sys.time(), "%Y%m%d_%H%M%S"))
+      }
       enquete_id(eid)
       create_enquete(db, eid, p$questionnaire_id, p$name)
       unit_data <- load_unit_data(name, uid)
+      orig <- list()
       for (var_name in names(unit_data)) {
         if (var_name == "_N1_DATA_") {
           env_vars[[var_name]] <- unit_data[[var_name]]
           next
         }
         val <- unit_data[[var_name]]
+        if (is.list(val)) {
+          orig[[var_name]] <- val
+        } else {
+          orig[[var_name]] <- as.character(val)
+        }
         if (is.list(val)) {
           env_vars[[var_name]] <- val
           for (i in seq_along(val)) {
@@ -349,6 +374,7 @@ questionnaire_pogues_server <- function(id) {
           env_vars[[var_name]] <- val
         }
       }
+      original_vars(orig)
       mods <- build_module_order(p, reactiveValuesToList(env_vars), list())
       if (length(mods) > 0) current_module(mods[1]) else current_module(NULL)
     })
@@ -387,7 +413,7 @@ questionnaire_pogues_server <- function(id) {
 
     observeEvent(input$btn_change_survey, {
       survey_selected(FALSE)
-      survey_name(NULL)
+      survey_key(NULL)
       unit_selected(FALSE)
       selected_unit_id(NULL)
       pogues(NULL)
@@ -439,6 +465,59 @@ questionnaire_pogues_server <- function(id) {
     })
 
     # ===========================================================================
+    # SAUVEGARDE DIRECTE D'UN TABLEAU (bouton "Enregistrer les modifications")
+    # ===========================================================================
+    
+    observeEvent(input$save_table_request, {
+      req(input$save_table_request)
+      q_name <- input$save_table_request$question
+      if (is.null(q_name) || nchar(q_name) == 0) return()
+      
+      p <- isolate(pogues())
+      db <- isolate(db_path())
+      eid <- isolate(enquete_id())
+      
+      if (is.null(p) || is.null(db) || is.null(eid)) {
+        showNotification("Contexte non disponible", type = "default")
+        return()
+      }
+      
+      pattern <- paste0("^tab_", q_name, "_(\\d+)_(\\d+)$")
+      nb_saved <- 0
+      
+      for (input_name in names(input)) {
+        if (grepl(pattern, input_name)) {
+          parts <- stringr::str_match(input_name, pattern)
+          row_idx <- as.numeric(parts[2])
+          col_idx <- as.numeric(parts[3])
+          new_value <- as.character(input[[input_name]])
+          
+          for (mn in names(p$modules)) {
+            mod <- p$modules[[mn]]
+            if (!is.null(mod) && q_name %in% names(mod$questions)) {
+              q_tmp <- mod$questions[[q_name]]
+              if (q_tmp$type == "TABLE") {
+                vn <- get_table_var_name(q_tmp, row_idx, col_idx, p)
+                save_response(db, eid, p$questionnaire_id, vn, new_value, ligne = row_idx, colonne = col_idx)
+                
+                cur <- isolate(env_vars[[vn]])
+                if (is.null(cur) || !is.list(cur)) cur <- list()
+                while (length(cur) < row_idx) cur[[length(cur) + 1]] <- NA
+                cur[[row_idx]] <- new_value
+                env_vars[[vn]] <- cur
+                
+                nb_saved <- nb_saved + 1
+                break
+              }
+            }
+          }
+        }
+      }
+      
+      showNotification(sprintf("Tableau '%s' : %d enregistr\u00e9e(s)", q_name, nb_saved), type = "default", duration = 3)
+    })
+    
+    # ===========================================================================
     # ACTION SUR UNE CELLULE (validation / restauration)
     # ===========================================================================
     
@@ -447,7 +526,9 @@ questionnaire_pogues_server <- function(id) {
       req(action, action$action %in% c("validate", "reset"))
       
       var_name <- action$var
-      new_value <- action$value
+      new_value <- as.character(action$value %||% "")
+      row_idx <- action$row
+      col_idx <- action$col
       a <- action$action
       
       p <- isolate(pogues())
@@ -455,10 +536,20 @@ questionnaire_pogues_server <- function(id) {
       eid <- isolate(enquete_id())
       req(p, db, eid)
       
-      if (a == "validate") {
-        env_vars[[var_name]] <- new_value
-        save_response(db, eid, p$questionnaire_id, var_name, new_value)
-      } else if (a == "reset") {
+      # Si row/col sont fournis → cellule de tableau : stocker comme liste
+      has_table_coords <- !is.null(row_idx) && !is.null(col_idx) &&
+                          nchar(as.character(row_idx)) > 0 && as.numeric(row_idx) > 0
+      
+      if (has_table_coords) {
+        cur <- isolate(env_vars[[var_name]])
+        if (is.null(cur) || !is.list(cur)) cur <- list()
+        r <- as.numeric(row_idx)
+        while (length(cur) < r) cur[[length(cur) + 1]] <- NA
+        cur[[r]] <- new_value
+        env_vars[[var_name]] <- cur
+        save_response(db, eid, p$questionnaire_id, var_name, new_value, ligne = r, colonne = as.numeric(col_idx))
+      } else {
+        # Cellule simple (non tableau)
         env_vars[[var_name]] <- new_value
         save_response(db, eid, p$questionnaire_id, var_name, new_value)
       }
@@ -699,7 +790,7 @@ questionnaire_pogues_server <- function(id) {
       if (current_module() == "QUESTIONNAIRE_END") {
         render_fin_module(enquete_id())
       } else {
-        render_module(current_module(), p, reactiveValuesToList(env_vars))
+        render_module(current_module(), p, reactiveValuesToList(env_vars), original_vars_list = isolate(original_vars()))
       }
     })
 
@@ -730,10 +821,10 @@ questionnaire_pogues_server <- function(id) {
         ))
       }
       if (survey_selected() && !unit_selected() && show_info()) {
-        return(render_survey_info_fun(survey_name()))
+        return(render_survey_info_fun(survey_key()))
       }
       if (survey_selected() && !unit_selected() && !show_info()) {
-        return(render_unit_selection_fun(survey_name(), units_effective_r()))
+        return(render_unit_selection_fun(survey_key(), units_effective_r()))
       }
       if (unit_selected() && !is.null(p)) {
         return(fluidPage(

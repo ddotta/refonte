@@ -12,7 +12,6 @@
 // Approche : délégation d'evenements (un seul listener global par type
 // d'evenement) pour plus de robustesse face aux re-rendus DOM de Shiny.
 // ==============================================================================
-
 (function() {
   'use strict';
 
@@ -146,6 +145,48 @@
     }
   });
 
+  // ---- Clic sur le bouton global "Enregistrer les modifications" ----
+  // Ce bouton doit avoir la classe .save-table-btn et un attribut data-input-id
+  // contenant le nom d'input namespaced (ex: module-1-table_modifications).
+  document.addEventListener('click', function(e) {
+    var saveBtn = e.target.closest('.save-table-btn');
+    if (!saveBtn) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    var inputId = saveBtn.getAttribute('data-input-id') || 'table_modifications';
+    var modifications = {};
+
+    // Parcourir toutes les cellules et collecter celles modifiées (data-saved != data-original)
+    document.querySelectorAll('td[data-var][data-row][data-col]').forEach(function(cell) {
+      var saved = cell.getAttribute('data-saved') || '';
+      var original = cell.getAttribute('data-original') || '';
+      // n'envoyer que si modifié
+      if (saved !== null && saved !== original) {
+        var qname = cell.getAttribute('data-qname') || cell.getAttribute('data-var');
+        var row = cell.getAttribute('data-row');
+        var col = cell.getAttribute('data-col');
+        var key = 'tab_' + qname + '_' + row + '_' + col;
+        modifications[key] = saved;
+      }
+    });
+
+    if (Object.keys(modifications).length === 0) {
+      console.log('[editable-table] aucune modification à envoyer');
+      // On peut déclencher une notification côté Shiny si souhaité, sinon rien
+      return;
+    }
+
+    if (typeof Shiny === 'undefined') {
+      console.warn('[editable-table] Shiny indisponible');
+      return;
+    }
+
+    Shiny.setInputValue(inputId, modifications, { priority: 'event' });
+    console.log('[editable-table] envoi sauvegarde tableau ->', inputId, modifications);
+  });
+
   // Saisie dans les inputs -> met a jour l'etat visuel en temps reel
   document.addEventListener('input', function(e) {
     var cell = e.target.closest('td[data-var]');
@@ -210,5 +251,44 @@
   });
 
   observer.observe(document.body, { childList: true, subtree: true });
+
+  // ===== Fonction appelée par le serveur (shinyjs::runjs) pour appliquer le résultat =====
+  // Le serveur exécute : shinyjs::runjs(sprintf("window.applySaveResults(%s);", jsonlite::toJSON(results)))
+  // results attendu : { success: { "tab_Q_1_1": true, ... }, error: { "tab_Q_2_3": "message", ... } }
+  window.applySaveResults = function(results) {
+    if (!results) return;
+    function markSaved(key) {
+      var m = key.match(/^tab_(.+)_(\d+)_(\d+)$/);
+      if (!m) return;
+      var qname = m[1], row = m[2], col = m[3];
+      // Prefer data-var selector, fallback to data-qname
+      var sel = 'td[data-var="'+qname+'"][data-row="'+row+'"][data-col="'+col+'"]';
+      var cell = document.querySelector(sel) || document.querySelector('td[data-qname="'+qname+'"][data-row="'+row+'"][data-col="'+col+'"]');
+      if (!cell) return;
+      var saved = cell.getAttribute('data-saved') || '';
+      cell.setAttribute('data-original', saved);
+      cell.classList.remove('pending-edit');
+      cell.classList.remove('error');
+      cell.classList.add('modified');
+      // update visual state of child input
+      updateCellState(cell);
+    }
+    function markError(key, msg) {
+      var m = key.match(/^tab_(.+)_(\d+)_(\d+)$/);
+      if (!m) return;
+      var qname = m[1], row = m[2], col = m[3];
+      var cell = document.querySelector('td[data-var="'+qname+'"][data-row="'+row+'"][data-col="'+col+'"]') ||
+                 document.querySelector('td[data-qname="'+qname+'"][data-row="'+row+'"][data-col="'+col+'"]');
+      if (!cell) return;
+      cell.classList.add('error');
+      if (msg) cell.setAttribute('title', msg);
+      updateCellState(cell);
+    }
+
+    if (results.success) Object.keys(results.success).forEach(function(k){ markSaved(k); });
+    if (results.error) Object.keys(results.error).forEach(function(k){ markError(k, results.error[k]); });
+
+    console.log('[editable-table] applySaveResults', results);
+  };
 
 })();
