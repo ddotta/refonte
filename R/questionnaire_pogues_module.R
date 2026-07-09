@@ -397,17 +397,16 @@ questionnaire_pogues_server <- function(id) {
           vn <- vg$variable_name[i]
           lignes <- unlist(vg$lignes[i])
           valeurs <- vg$valeurs[[i]]
-          if (length(lignes) > 1) {
-            vals <- list()
-            for (j in seq_along(lignes)) {
-              l <- lignes[j]
-              while (length(vals) < l) vals[[length(vals) + 1]] <- NA
-              vals[[l]] <- valeurs[[j]]
-            }
-            env_vars[[vn]] <- vals
-          } else {
-            env_vars[[vn]] <- as.character(valeurs[1])
+          # Toujours stocker en liste indexée par ligne pour les variables tableau.
+          # Les variables scalaires (sans ligne) sont gérées par get_variable_value
+          # qui extrait le premier élément si besoin.
+          vals <- list()
+          for (j in seq_along(lignes)) {
+            l <- lignes[j]
+            while (length(vals) < l) vals[[length(vals) + 1]] <- NA_character_
+            vals[[l]] <- as.character(valeurs[[j]])
           }
+          env_vars[[vn]] <- vals
         }
       }
     })
