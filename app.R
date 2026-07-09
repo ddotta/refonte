@@ -52,14 +52,13 @@ ui <- dashboardPage(
 # ==============================================================================
 
 server <- function(input, output, session) {
-
   # Dernière mise à jour
   output$derniereMiseAJour <- renderText({
     if (is.null(donnees_globales$df_questionnaire) || nrow(donnees_globales$df_questionnaire) == 0) {
       return("Pas de questionnaire chargé")
     } else {
-      maxDate <- max(as.Date(donnees_globales$df_questionnaire %>% pull("DATE_MAJ_SUIVAL"), format = '%d/%m/%Y'))
-      return(paste0("Mise à jour : ", format(maxDate, '%d/%m/%Y')))
+      maxDate <- max(as.Date(donnees_globales$df_questionnaire %>% pull("DATE_MAJ_SUIVAL"), format = "%d/%m/%Y"))
+      return(paste0("Mise à jour : ", format(maxDate, "%d/%m/%Y")))
     }
   })
 
@@ -67,6 +66,10 @@ server <- function(input, output, session) {
   output$Environnement <- renderText({
     str_to_upper(Sys.getenv("ENVIRONNEMENT"))
   })
+
+  ### Ligne de code qui permet de stopper l'app Shiny automatiquement qd on ferme la fenetre de l'app
+  session$onSessionEnded(stopApp)
+
 
   # Quitter l'application
   observeEvent(input$quitter, {
