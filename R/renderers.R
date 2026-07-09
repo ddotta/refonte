@@ -197,6 +197,13 @@ get_variable_value <- function(var_name, row_idx, env_vars_list) {
   return(as.character(val))
 }
 
+#' Nom de la variable interne utilisée pour stocker une correction utilisateur
+#' apportée à une valeur N-1 (édition activée via le widget "Éditer les
+#' données N-1 ?"). Distinct du nom de variable N pour ne jamais écraser la
+#' donnée de l'année en cours, tout en étant sauvegardé de façon identique
+#' (même mécanisme save_response / cell_action / table_modifications).
+n1_variable_name <- function(var_name) paste0("N1__", var_name)
+
 #' Récupère la valeur N-1 pour une variable et une ligne donnée
 get_n1_value <- function(n1_data, var_name, row_idx) {
   if (is.null(n1_data)) {
@@ -320,7 +327,8 @@ get_table_n_rows <- function(q, pogues, env_vars_list) {
   base_n
 }
 
-render_table_question <- function(q, pogues, env_vars_list, input_prefix = "", original_vars_list = list()) {
+render_table_question <- function(q, pogues, env_vars_list, input_prefix = "", original_vars_list = list(),
+                                   n1_edit_enabled = FALSE) {
   q_name <- q$name
   q_label <- resolve_vtl(q$label, env_vars_list)
 
@@ -391,7 +399,14 @@ render_table_question <- function(q, pogues, env_vars_list, input_prefix = "", o
     tags$table(
       class = "table table-bordered production-table editable-table",
       tags$thead(tags$tr(
-        lapply(col_labels, function(lbl) tags$th(HTML(lbl))),
+        lapply(col_labels, function(lbl) {
+          tagList(
+            tags$th(HTML(lbl)),
+            if (has_n1) {
+              tags$th("N-1", style = "font-weight: 400; color: #7f8c8d; font-size: 12px;")
+            }
+          )
+        }),
         tags$th("")
       )),
       tags$tbody(lapply(1:n_rows, function(row_idx) {
@@ -408,6 +423,36 @@ render_table_question <- function(q, pogues, env_vars_list, input_prefix = "", o
             # Valeur N-1 pour cette cellule
             n1_val <- NULL
             if (has_n1) n1_val <- get_n1_value(n1_data, var_name, row_idx)
+
+            # Infos pour la cellule N-1 éditable (si le widget "Éditer les
+            # données N-1 ?" est activé). Le fonctionnement est identique à
+            # celui de la cellule N : nom de variable dédié (n1_variable_name),
+            # valeur d'origine = donnée N-1 importée, badge/reset/validate.
+            n1_var_name <- n1_variable_name(var_name)
+            n1_original_val <- if (!is.null(n1_val)) as.character(n1_val) else ""
+            n1_override <- if (has_n1) get_variable_value(n1_var_name, row_idx, env_vars_list) else ""
+            n1_current_val <- if (nzchar(n1_override)) n1_override else n1_original_val
+            n1_is_corrected <- FALSE
+            try(
+              {
+                n1_is_corrected <- nchar(n1_original_val) > 0 &&
+                  cell_value_differs(n1_current_val, n1_original_val, is_numeric)
+              },
+              silent = TRUE
+            )
+            n1_input_id <- paste0(input_prefix, "tabn1_", q_name, "_", row_idx, "_", col_idx)
+            n1_indicators <- div(
+              class = "cell-indicators",
+              span(class = "modified-indicator", style = if (n1_is_corrected) "" else "display:none;", "C"),
+              tags$a(
+                href = "#", class = "reset-btn", style = if (n1_is_corrected) "" else "display:none;",
+                title = "Rétablir la valeur N-1 initiale", tags$i(class = "fa fa-undo")
+              ),
+              tags$a(
+                href = "#", class = "validate-btn", style = "display:none;",
+                title = "Valider la modification N-1", tags$i(class = "fa fa-check")
+              )
+            )
 
             # Valeur d'origine (import), figée dès le chargement de l'unité :
             # sert à savoir si la cellule a été corrigée et à la restaurer.
@@ -447,39 +492,93 @@ render_table_question <- function(q, pogues, env_vars_list, input_prefix = "", o
               raw_val <- if (!is.na(num_val)) as.character(num_val) else ""
               formatted_val <- if (!is.na(num_val)) format_numeric(num_val) else ""
 
-              tags$td(
-                class = paste("numeric-cell", if (is_corrected) "modified" else ""),
-                `data-original` = original_val,
-                `data-saved` = raw_val,
-                `data-var` = var_name,
-                `data-qname` = q_name,
-                `data-row` = row_idx,
-                `data-col` = col_idx,
-                `data-action-input` = cell_action_input,
-                div(
-                  class = "cell-content",
-                  textInput(input_id, NULL, value = raw_val, width = "100%"),
-                  indicators
+              n1_td <- if (!has_n1) {
+                NULL
+              } else if (n1_edit_enabled) {
+                tags$td(
+                  class = paste("numeric-cell n1-cell", if (n1_is_corrected) "modified" else ""),
+                  `data-original` = n1_original_val,
+                  `data-saved` = n1_current_val,
+                  `data-var` = n1_var_name,
+                  `data-qname` = paste0("n1_", q_name),
+                  `data-row` = row_idx,
+                  `data-col` = col_idx,
+                  `data-action-input` = cell_action_input,
+                  div(
+                    class = "cell-content",
+                    textInput(n1_input_id, NULL, value = n1_current_val, width = "100%"),
+                    n1_indicators
+                  )
+                )
+              } else {
+                tags$td(
+                  class = "n1-value-cell",
+                  if (!is.null(n1_val)) div(class = "n1-value", format_numeric(n1_val))
+                )
+              }
+
+              tagList(
+                tags$td(
+                  class = paste("numeric-cell", if (is_corrected) "modified" else ""),
+                  `data-original` = original_val,
+                  `data-saved` = raw_val,
+                  `data-var` = var_name,
+                  `data-qname` = q_name,
+                  `data-row` = row_idx,
+                  `data-col` = col_idx,
+                  `data-action-input` = cell_action_input,
+                  div(
+                    class = "cell-content",
+                    textInput(input_id, NULL, value = raw_val, width = "100%"),
+                    indicators
+                  ),
+                  if (unit_label != "") div(class = "cell-unit", unit_label)
                 ),
-                if (unit_label != "") div(class = "cell-unit", unit_label),
-                if (!is.null(n1_val)) div(class = "n1-value", paste0("N-1: ", format_numeric(n1_val)))
+                n1_td
               )
             } else {
-              tags$td(
-                class = paste("text-cell", if (is_corrected) "modified" else ""),
-                `data-original` = original_val,
-                `data-saved` = current_val,
-                `data-var` = var_name,
-                `data-qname` = q_name,
-                `data-row` = row_idx,
-                `data-col` = col_idx,
-                `data-action-input` = cell_action_input,
-                div(
-                  class = "cell-content",
-                  textInput(input_id, NULL, value = current_val, width = "150px"),
-                  indicators
+              n1_td <- if (!has_n1) {
+                NULL
+              } else if (n1_edit_enabled) {
+                tags$td(
+                  class = paste("text-cell n1-cell", if (n1_is_corrected) "modified" else ""),
+                  `data-original` = n1_original_val,
+                  `data-saved` = n1_current_val,
+                  `data-var` = n1_var_name,
+                  `data-qname` = paste0("n1_", q_name),
+                  `data-row` = row_idx,
+                  `data-col` = col_idx,
+                  `data-action-input` = cell_action_input,
+                  div(
+                    class = "cell-content",
+                    textInput(n1_input_id, NULL, value = n1_current_val, width = "150px"),
+                    n1_indicators
+                  )
+                )
+              } else {
+                tags$td(
+                  class = "n1-value-cell",
+                  if (!is.null(n1_val)) div(class = "n1-value", as.character(n1_val))
+                )
+              }
+
+              tagList(
+                tags$td(
+                  class = paste("text-cell", if (is_corrected) "modified" else ""),
+                  `data-original` = original_val,
+                  `data-saved` = current_val,
+                  `data-var` = var_name,
+                  `data-qname` = q_name,
+                  `data-row` = row_idx,
+                  `data-col` = col_idx,
+                  `data-action-input` = cell_action_input,
+                  div(
+                    class = "cell-content",
+                    textInput(input_id, NULL, value = current_val, width = "150px"),
+                    indicators
+                  )
                 ),
-                if (!is.null(n1_val)) div(class = "n1-value", paste0("N-1: ", as.character(n1_val)))
+                n1_td
               )
             }
           }),
@@ -533,8 +632,39 @@ render_table_question <- function(q, pogues, env_vars_list, input_prefix = "", o
   )
 }
 
+#' Indique si le module courant contient au moins une question TABLE pour
+#' laquelle des données N-1 sont disponibles (sert à n'afficher le widget
+#' "Éditer les données N-1 ?" que sur les pages concernées).
+module_has_n1_data <- function(module_name, pogues, env_vars_list) {
+  n1_data <- env_vars_list[["_N1_DATA_"]]
+  if (is.null(n1_data) || length(n1_data) == 0) {
+    return(FALSE)
+  }
+  mod <- pogues$modules[[module_name]]
+  if (is.null(mod)) {
+    return(FALSE)
+  }
+  any(vapply(names(mod$questions), function(q_name) {
+    q <- mod$questions[[q_name]]
+    input_type <- get_input_type(q$type, pogues$variables[[q_name]])
+    if (input_type != "table") {
+      return(FALSE)
+    }
+    dims <- get_table_dims(q)
+    if (is.null(dims$primary_dim) || length(dims$measure_dims) == 0) {
+      return(FALSE)
+    }
+    any(vapply(seq_along(dims$measure_dims), function(col_idx) {
+      dim <- dims$measure_dims[[col_idx]]
+      vn <- if (!is.null(dim$name)) dim$name else paste0(q_name, col_idx)
+      !is.null(n1_data[[vn]])
+    }, logical(1)))
+  }, logical(1)))
+}
+
 #' Rendu d'un module complet
-render_module <- function(module_name, pogues, env_vars_list, input_prefix = "", original_vars_list = list()) {
+render_module <- function(module_name, pogues, env_vars_list, input_prefix = "", original_vars_list = list(),
+                           n1_edit_enabled = FALSE) {
   mod <- pogues$modules[[module_name]]
   if (is.null(mod)) {
     return(h3("Module non trouvé : ", module_name))
@@ -543,7 +673,7 @@ render_module <- function(module_name, pogues, env_vars_list, input_prefix = "",
     q <- mod$questions[[q_name]]
     input_type <- get_input_type(q$type, pogues$variables[[q_name]])
     if (input_type == "table") {
-      render_table_question(q, pogues, env_vars_list, input_prefix, original_vars_list)
+      render_table_question(q, pogues, env_vars_list, input_prefix, original_vars_list, n1_edit_enabled)
     } else if (input_type %in% c("radio", "checkbox")) {
       render_choice_question(q, pogues, env_vars_list, input_prefix)
     } else if (input_type == "submodule") {

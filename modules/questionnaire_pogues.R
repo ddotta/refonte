@@ -129,6 +129,7 @@ questionnaire_pogues_server <- function(id) {
     unit_info_data <- reactiveVal(NULL)
     unit_overrides <- reactiveVal(list())
     unit_panel_refresh <- reactiveVal(0)
+    n1_edit_enabled <- reactiveVal(FALSE)   # widget "Éditer les données N-1 ?" (Oui/Non), affiché sur chaque page concernée
 
     observe({
       for (sk in names(AVAILABLE_SURVEYS)) {
@@ -649,15 +650,19 @@ questionnaire_pogues_server <- function(id) {
             new_value <- as.character(modifications[[input_id]])
             cat("Traitement:", input_id, "=", new_value, "\n")
 
-            # Parser l'ID : format tab_QNAME_ROW_COL
+            # Parser l'ID : format tab_QNAME_ROW_COL (les cellules N-1 utilisent
+            # un qname préfixé "n1_QNAME" - cf. render_table_question)
             pattern <- "^tab_(.+)_(\\d+)_(\\d+)$"
             if (grepl(pattern, input_id)) {
               parts <- stringr::str_match(input_id, pattern)
-              qname <- parts[2]
+              qname_raw <- parts[2]
               row_idx <- as.numeric(parts[3])
               col_idx <- as.numeric(parts[4])
 
-              cat("  Parsed: qname=", qname, "row=", row_idx, "col=", col_idx, "\n")
+              is_n1 <- grepl("^n1_", qname_raw)
+              qname <- if (is_n1) sub("^n1_", "", qname_raw) else qname_raw
+
+              cat("  Parsed: qname=", qname, "row=", row_idx, "col=", col_idx, "n1=", is_n1, "\n")
 
               # Retrouver le nom de variable
               found <- FALSE
@@ -670,6 +675,7 @@ questionnaire_pogues_server <- function(id) {
                 if (q$type != "TABLE") next
 
                 vn <- get_table_var_name(q, row_idx, col_idx, p)
+                if (is_n1) vn <- n1_variable_name(vn)
                 cat("  Variable trouvée:", vn, "\n")
 
                 # Sauvegarder en base de données
@@ -812,9 +818,28 @@ questionnaire_pogues_server <- function(id) {
       if (current_module() == "QUESTIONNAIRE_END") {
         render_fin_module(enquete_id())
       } else {
-        render_module(current_module(), p, reactiveValuesToList(env_vars), original_vars_list = isolate(original_vars()))
+        evl <- reactiveValuesToList(env_vars)
+        tagList(
+          if (module_has_n1_data(current_module(), p, evl)) {
+            div(
+              class = "n1-edit-toggle", style = "margin-bottom: 15px;",
+              shinyWidgets::radioGroupButtons(
+                inputId = session$ns("toggle_edit_n1"),
+                label = "Éditer les données N-1 ?",
+                choices = c("Non" = "non", "Oui" = "oui"),
+                selected = if (isTRUE(n1_edit_enabled())) "oui" else "non",
+                status = "primary", size = "sm"
+              )
+            )
+          },
+          render_module(current_module(), p, evl, original_vars_list = isolate(original_vars()), n1_edit_enabled = isTRUE(n1_edit_enabled()))
+        )
       }
     })
+
+    observeEvent(input$toggle_edit_n1, {
+      n1_edit_enabled(identical(input$toggle_edit_n1, "oui"))
+    }, ignoreInit = TRUE)
 
     observeEvent(input$btn_submit, {
       db <- db_path()
