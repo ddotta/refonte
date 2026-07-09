@@ -21,6 +21,11 @@
 .questionnaire-module .production-table td { text-align: center; vertical-align: middle; }
 .questionnaire-module .unit-highlight { background-color: #fef9e7 !important; }
 .questionnaire-module .n1-value { font-size: 10px; color: #999; font-style: italic; margin-top: 2px; }
+.questionnaire-module .n1-value-cell { background-color: #fafafa; text-align: center; vertical-align: middle; }
+.questionnaire-module .n1-value-cell .n1-value { font-size: 12px; color: #777; font-style: normal; margin-top: 0; }
+.questionnaire-module tr.n1-row { background-color: #f5f8fc; }
+.questionnaire-module tr.n1-row td.n1-cell { background-color: #eef3fa; }
+.questionnaire-module .n1-edit-toggle { text-align: right; }
 .questionnaire-module .form-group { margin-bottom: 5px; }
 .shiny-notification { position: fixed; top: 10px; right: 10px; z-index: 99999; }
 

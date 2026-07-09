@@ -399,19 +399,11 @@ render_table_question <- function(q, pogues, env_vars_list, input_prefix = "", o
     tags$table(
       class = "table table-bordered production-table editable-table",
       tags$thead(tags$tr(
-        lapply(col_labels, function(lbl) {
-          tagList(
-            tags$th(HTML(lbl)),
-            if (has_n1) {
-              tags$th("N-1", style = "font-weight: 400; color: #7f8c8d; font-size: 12px;")
-            }
-          )
-        }),
+        lapply(col_labels, function(lbl) tags$th(HTML(lbl))),
         tags$th("")
       )),
       tags$tbody(lapply(1:n_rows, function(row_idx) {
-        tags$tr(
-          lapply(seq_along(col_labels), function(col_idx) {
+        col_cells <- lapply(seq_along(col_labels), function(col_idx) {
             input_id <- paste0(input_prefix, "tab_", q_name, "_", row_idx, "_", col_idx)
             var_name <- get_var_name(row_idx, col_idx)
             var_info <- pogues$variables[[var_name]]
@@ -517,8 +509,8 @@ render_table_question <- function(q, pogues, env_vars_list, input_prefix = "", o
                 )
               }
 
-              tagList(
-                tags$td(
+              list(
+                main = tags$td(
                   class = paste("numeric-cell", if (is_corrected) "modified" else ""),
                   `data-original` = original_val,
                   `data-saved` = raw_val,
@@ -534,7 +526,7 @@ render_table_question <- function(q, pogues, env_vars_list, input_prefix = "", o
                   ),
                   if (unit_label != "") div(class = "cell-unit", unit_label)
                 ),
-                n1_td
+                n1 = n1_td
               )
             } else {
               n1_td <- if (!has_n1) {
@@ -562,8 +554,8 @@ render_table_question <- function(q, pogues, env_vars_list, input_prefix = "", o
                 )
               }
 
-              tagList(
-                tags$td(
+              list(
+                main = tags$td(
                   class = paste("text-cell", if (is_corrected) "modified" else ""),
                   `data-original` = original_val,
                   `data-saved` = current_val,
@@ -578,26 +570,43 @@ render_table_question <- function(q, pogues, env_vars_list, input_prefix = "", o
                     indicators
                   )
                 ),
-                n1_td
+                n1 = n1_td
               )
             }
-          }),
-          # Colonne "actions" : suppression de la ligne (désactivée s'il ne
-          # reste qu'une seule ligne, pour toujours garder au moins une ligne)
-          tags$td(
-            class = "row-actions",
-            if (n_rows > 1) {
-              tags$a(
-                href = "#", class = "delete-row-btn", title = "Supprimer cette ligne",
-                onclick = sprintf(
-                  "if(confirm('Supprimer cette ligne ?')){Shiny.setInputValue('%s',{question:'%s',action:'delete',row:%d,ts:Date.now()},{priority:'event'});} return false;",
-                  row_action_input, q_name, row_idx
-                ),
-                tags$i(class = "fa fa-trash")
-              )
-            }
+          })
+
+          # Ligne N : une <td> par colonne + la colonne d'actions (suppression
+          # de ligne). Cette <td> d'actions couvre aussi la ligne N-1 juste en
+          # dessous (rowspan) : les deux lignes forment une seule "ligne" de
+          # données du point de vue de l'utilisateur.
+          main_row <- tags$tr(
+            lapply(col_cells, function(cc) cc$main),
+            tags$td(
+              class = "row-actions",
+              rowspan = if (has_n1) "2" else NULL,
+              if (n_rows > 1) {
+                tags$a(
+                  href = "#", class = "delete-row-btn", title = "Supprimer cette ligne",
+                  onclick = sprintf(
+                    "if(confirm('Supprimer cette ligne ?')){Shiny.setInputValue('%s',{question:'%s',action:'delete',row:%d,ts:Date.now()},{priority:'event'});} return false;",
+                    row_action_input, q_name, row_idx
+                  ),
+                  tags$i(class = "fa fa-trash")
+                )
+              }
+            )
           )
-        )
+
+          # Ligne N-1 : affichée juste en dessous de la ligne N (pas sur la
+          # même ligne de tableau), éditable ou en lecture seule selon le widget.
+          n1_row <- if (has_n1) {
+            tags$tr(
+              class = "n1-row",
+              lapply(col_cells, function(cc) cc$n1)
+            )
+          }
+
+          tagList(main_row, n1_row)
       }))
     ),
     div(
