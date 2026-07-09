@@ -508,7 +508,7 @@ render_table_question <- function(q, pogues, env_vars_list, input_prefix = "", o
               } else {
                 tags$td(
                   class = "n1-value-cell",
-                  if (!is.null(n1_val)) div(class = "n1-value", format_numeric(n1_val))
+                  if (nzchar(n1_current_val) && n1_current_val != "") div(class = "n1-value", format_numeric(n1_current_val))
                 )
               }
 
@@ -553,7 +553,7 @@ render_table_question <- function(q, pogues, env_vars_list, input_prefix = "", o
               } else {
                 tags$td(
                   class = "n1-value-cell",
-                  if (!is.null(n1_val)) div(class = "n1-value", as.character(n1_val))
+                  if (nzchar(n1_current_val) && n1_current_val != "") div(class = "n1-value", as.character(n1_current_val))
                 )
               }
 
