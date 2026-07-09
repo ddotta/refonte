@@ -483,6 +483,9 @@ render_table_question <- function(q, pogues, env_vars_list, input_prefix = "", o
               num_val <- tryCatch(as.numeric(gsub("[^0-9.,]", "", current_val)), warning = function(w) NA)
               raw_val <- if (!is.na(num_val)) as.character(num_val) else ""
               formatted_val <- if (!is.na(num_val)) format_numeric(num_val) else ""
+              
+              n1_num_val <- tryCatch(as.numeric(gsub("[^0-9.,]", "", n1_current_val)), warning = function(w) NA)
+              n1_formatted_val <- if (!is.na(n1_num_val)) format_numeric(n1_num_val) else n1_current_val
 
               n1_td <- if (!has_n1) {
                 NULL
@@ -498,7 +501,7 @@ render_table_question <- function(q, pogues, env_vars_list, input_prefix = "", o
                   `data-action-input` = cell_action_input,
                   div(
                     class = "cell-content",
-                    textInput(n1_input_id, NULL, value = n1_current_val, width = "100%"),
+                    textInput(n1_input_id, NULL, value = n1_formatted_val, width = "100%"),
                     n1_indicators
                   )
                 )
@@ -521,7 +524,7 @@ render_table_question <- function(q, pogues, env_vars_list, input_prefix = "", o
                   `data-action-input` = cell_action_input,
                   div(
                     class = "cell-content",
-                    textInput(input_id, NULL, value = raw_val, width = "100%"),
+                    textInput(input_id, NULL, value = formatted_val, width = "100%"),
                     indicators
                   ),
                   if (unit_label != "") div(class = "cell-unit", unit_label)

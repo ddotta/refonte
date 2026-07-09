@@ -537,6 +537,9 @@ questionnaire_pogues_server <- function(id) {
       eid <- isolate(enquete_id())
       req(p, db, eid)
       
+      # Nettoyer les espaces (séparateurs de milliers) pour les valeurs numériques
+      clean_val <- gsub("[[:space:]]", "", new_value)
+      
       # Si row/col sont fournis → cellule de tableau : stocker comme liste
       has_table_coords <- !is.null(row_idx) && !is.null(col_idx) &&
                           nchar(as.character(row_idx)) > 0 && as.numeric(row_idx) > 0
@@ -546,13 +549,13 @@ questionnaire_pogues_server <- function(id) {
         if (is.null(cur) || !is.list(cur)) cur <- list()
         r <- as.numeric(row_idx)
         while (length(cur) < r) cur[[length(cur) + 1]] <- NA
-        cur[[r]] <- new_value
+        cur[[r]] <- clean_val
         env_vars[[var_name]] <- cur
-        save_response(db, eid, p$questionnaire_id, var_name, new_value, ligne = r, colonne = as.numeric(col_idx))
+        save_response(db, eid, p$questionnaire_id, var_name, clean_val, ligne = r, colonne = as.numeric(col_idx))
       } else {
         # Cellule simple (non tableau)
-        env_vars[[var_name]] <- new_value
-        save_response(db, eid, p$questionnaire_id, var_name, new_value)
+        env_vars[[var_name]] <- clean_val
+        save_response(db, eid, p$questionnaire_id, var_name, clean_val)
       }
     })
     
