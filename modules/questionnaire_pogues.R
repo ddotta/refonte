@@ -321,63 +321,73 @@ questionnaire_pogues_server <- function(id) {
       if (is.null(pogues_path) || !file.exists(pogues_path)) {
         return()
       }
-      p <- load_pogues(pogues_path)
-      pogues(p)
-      db <- paste0(tolower(p$name), "_questionnaire.db")
-      db_path(db)
-      init_db(db)
-      
-      # --- Rechercher un enquete_id existant pour cette paire (p$name, uid) ---
-      # format attendu : <p$name>_<uid>_...
-      con <- DBI::dbConnect(RSQLite::SQLite(), db)
-      pref <- paste0(p$name, "_", uid, "_%")
-      
-      existing <- tryCatch({
-        DBI::dbGetQuery(con,
-          "SELECT id FROM enquetes WHERE id LIKE :pref ORDER BY updated_at DESC LIMIT 1",
-          params = list(pref = pref))
-      }, error = function(e) data.frame(id = character(0), stringsAsFactors = FALSE))
-      
-      DBI::dbDisconnect(con)
-      
-      if (nrow(existing) > 0 && nzchar(existing$id[1])) {
-        eid <- existing$id[1]
-      } else {
-        eid <- paste0(p$name, "_", uid, "_", format(Sys.time(), "%Y%m%d_%H%M%S"))
-      }
-      enquete_id(eid)
-      create_enquete(db, eid, p$questionnaire_id, p$name)
-      unit_data <- load_unit_data(name, uid)
-      orig <- list()
-      for (var_name in names(unit_data)) {
-        if (var_name == "_N1_DATA_") {
-          env_vars[[var_name]] <- unit_data[[var_name]]
-          next
+
+      executer_en_securite(contexte = "chargement du questionnaire Pogues", expr = {
+        p <- load_pogues(pogues_path)
+        if (is.null(p)) {
+          # load_pogues() a déjà journalisé la cause exacte (JSON illisible/malformé) ;
+          # on informe seulement l'utilisateur ici, sans planter la session.
+          notifier_erreur("Impossible de charger le questionnaire", "fichier Pogues invalide ou introuvable")
+          return(invisible(NULL))
         }
-        val <- unit_data[[var_name]]
-        if (is.list(val)) {
-          orig[[var_name]] <- val
-        } else {
-          orig[[var_name]] <- as.character(val)
-        }
-        if (is.list(val)) {
-          env_vars[[var_name]] <- val
-          for (i in seq_along(val)) {
-            v <- val[[i]]
-            if (length(v) == 1 && !is.null(v) && !is.na(v)) {
-              save_response(db, eid, p$questionnaire_id, var_name, as.character(v), ligne = i, colonne = 1)
-            }
+        pogues(p)
+        db <- paste0(tolower(p$name), "_questionnaire.db")
+        db_path(db)
+        init_db(db)
+
+        # --- Rechercher un enquete_id existant pour cette paire (p$name, uid) ---
+        # format attendu : <p$name>_<uid>_...
+        pref <- paste0(p$name, "_", uid, "_%")
+        existing <- with_db_connection(
+          db_path = db,
+          contexte = "recherche d'une enquête existante",
+          valeur_par_defaut = data.frame(id = character(0), stringsAsFactors = FALSE),
+          fn = function(con) {
+            DBI::dbGetQuery(con,
+              "SELECT id FROM enquetes WHERE id LIKE :pref ORDER BY updated_at DESC LIMIT 1",
+              params = list(pref = pref))
           }
-        } else if (length(val) == 1) {
-          env_vars[[var_name]] <- val
-          if (!is.na(val)) save_response(db, eid, p$questionnaire_id, var_name, as.character(val))
+        )
+
+        if (nrow(existing) > 0 && nzchar(existing$id[1])) {
+          eid <- existing$id[1]
         } else {
-          env_vars[[var_name]] <- val
+          eid <- paste0(p$name, "_", uid, "_", format(Sys.time(), "%Y%m%d_%H%M%S"))
         }
-      }
-      original_vars(orig)
-      mods <- build_module_order(p, reactiveValuesToList(env_vars), list())
-      if (length(mods) > 0) current_module(mods[1]) else current_module(NULL)
+        enquete_id(eid)
+        create_enquete(db, eid, p$questionnaire_id, p$name)
+        unit_data <- load_unit_data(name, uid)
+        orig <- list()
+        for (var_name in names(unit_data)) {
+          if (var_name == "_N1_DATA_") {
+            env_vars[[var_name]] <- unit_data[[var_name]]
+            next
+          }
+          val <- unit_data[[var_name]]
+          if (is.list(val)) {
+            orig[[var_name]] <- val
+          } else {
+            orig[[var_name]] <- as.character(val)
+          }
+          if (is.list(val)) {
+            env_vars[[var_name]] <- val
+            for (i in seq_along(val)) {
+              v <- val[[i]]
+              if (length(v) == 1 && !is.null(v) && !is.na(v)) {
+                save_response(db, eid, p$questionnaire_id, var_name, as.character(v), ligne = i, colonne = 1)
+              }
+            }
+          } else if (length(val) == 1) {
+            env_vars[[var_name]] <- val
+            if (!is.na(val)) save_response(db, eid, p$questionnaire_id, var_name, as.character(val))
+          } else {
+            env_vars[[var_name]] <- val
+          }
+        }
+        original_vars(orig)
+        mods <- build_module_order(p, reactiveValuesToList(env_vars), list())
+        if (length(mods) > 0) current_module(mods[1]) else current_module(NULL)
+      })
     })
 
     # Charger réponses existantes

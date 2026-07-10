@@ -437,11 +437,11 @@ render_table_question <- function(q, pogues, env_vars_list, input_prefix = "", o
               class = "cell-indicators",
               span(class = "modified-indicator", style = if (n1_is_corrected) "" else "display:none;", "C"),
               tags$a(
-                href = "#", class = "reset-btn", style = if (n1_is_corrected) "" else "display:none;",
+                href = "#", class = "reset-btn text-danger", style = if (n1_is_corrected) "" else "display:none;",
                 title = "Rétablir la valeur N-1 initiale", tags$i(class = "fa fa-undo")
               ),
               tags$a(
-                href = "#", class = "validate-btn", style = "display:none;",
+                href = "#", class = "validate-btn btn btn-xs btn-success", style = "display:none;",
                 title = "Valider la modification N-1", tags$i(class = "fa fa-check")
               )
             )
@@ -465,11 +465,11 @@ render_table_question <- function(q, pogues, env_vars_list, input_prefix = "", o
               class = "cell-indicators",
               span(class = "modified-indicator", style = if (is_corrected) "" else "display:none;", "C"),
               tags$a(
-                href = "#", class = "reset-btn", style = if (is_corrected) "" else "display:none;",
+                href = "#", class = "reset-btn text-danger", style = if (is_corrected) "" else "display:none;",
                 title = "Rétablir la valeur initiale", tags$i(class = "fa fa-undo")
               ),
               tags$a(
-                href = "#", class = "validate-btn", style = "display:none;",
+                href = "#", class = "validate-btn btn btn-xs btn-success", style = "display:none;",
                 title = "Valider la modification", tags$i(class = "fa fa-check")
               )
             )
@@ -589,7 +589,7 @@ render_table_question <- function(q, pogues, env_vars_list, input_prefix = "", o
               rowspan = if (has_n1) "2" else NULL,
               if (n_rows > 1) {
                 tags$a(
-                  href = "#", class = "delete-row-btn", title = "Supprimer cette ligne",
+                  href = "#", class = "delete-row-btn text-danger", title = "Supprimer cette ligne",
                   onclick = sprintf(
                     "if(confirm('Supprimer cette ligne ?')){Shiny.setInputValue('%s',{question:'%s',action:'delete',row:%d,ts:Date.now()},{priority:'event'});} return false;",
                     row_action_input, q_name, row_idx
@@ -615,7 +615,7 @@ render_table_question <- function(q, pogues, env_vars_list, input_prefix = "", o
     div(
       style = "margin-top: 8px;",
       tags$a(
-        href = "#", class = "btn btn-default btn-sm add-row-btn",
+        href = "#", class = "btn btn-default btn-sm",
         onclick = sprintf(
           "Shiny.setInputValue('%s',{question:'%s',action:'add',ts:Date.now()},{priority:'event'}); return false;",
           row_action_input, q_name

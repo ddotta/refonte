@@ -52,14 +52,22 @@ ui <- dashboardPage(
 # ==============================================================================
 
 server <- function(input, output, session) {
+  # Journalisation des erreurs non interceptées (voir R/error_handling.R).
+  # Ne remplace pas les tryCatch ciblés dans les modules, mais garantit qu'on
+  # a une trace de tout problème imprévu, et qu'aucun détail technique ne
+  # fuite côté utilisateur.
+  installer_gestion_erreur_session(session)
+
   # Dernière mise à jour
   output$derniereMiseAJour <- renderText({
-    if (is.null(donnees_globales$df_questionnaire) || nrow(donnees_globales$df_questionnaire) == 0) {
-      return("Pas de questionnaire chargé")
-    } else {
-      maxDate <- max(as.Date(donnees_globales$df_questionnaire %>% pull("DATE_MAJ_SUIVAL"), format = "%d/%m/%Y"))
-      return(paste0("Mise à jour : ", format(maxDate, "%d/%m/%Y")))
-    }
+    executer_en_securite(contexte = "calcul de la dernière mise à jour", valeur_par_defaut = "Date de mise à jour indisponible", notifier = FALSE, expr = {
+      if (is.null(donnees_globales$df_questionnaire) || nrow(donnees_globales$df_questionnaire) == 0) {
+        "Pas de questionnaire chargé"
+      } else {
+        maxDate <- max(as.Date(donnees_globales$df_questionnaire %>% pull("DATE_MAJ_SUIVAL"), format = "%d/%m/%Y"), na.rm = TRUE)
+        paste0("Mise à jour : ", format(maxDate, "%d/%m/%Y"))
+      }
+    })
   })
 
   # Affichage de l'environnement

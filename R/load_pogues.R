@@ -62,9 +62,23 @@ find_pogues_file <- function(survey_name = NULL) {
 
 #' Charge et parse le fichier Pogues JSON
 #' @param path Chemin vers le fichier JSON
-#' @return Liste structurée contenant variables, codelists, modules, flowcontrol
+#' @return Liste structurée contenant variables, codelists, modules, flowcontrol,
+#'   ou NULL si le fichier est illisible/malformé (avec journalisation de l'erreur
+#'   via `log_erreur()`, cf. R/error_handling.R)
 load_pogues <- function(path = find_pogues_file()) {
-  
+  tryCatch(
+    .load_pogues_impl(path),
+    error = function(cond) {
+      log_erreur(paste0("chargement du questionnaire Pogues '", path, "'"), cond)
+      NULL
+    }
+  )
+}
+
+#' Implémentation interne de load_pogues() (non exportée, sans gestion d'erreur :
+#' la gestion d'erreur est centralisée dans load_pogues() ci-dessus)
+.load_pogues_impl <- function(path) {
+
   data <- fromJSON(path, simplifyVector = FALSE, simplifyDataFrame = FALSE, simplifyMatrix = FALSE)
   
   # --- Variables ---

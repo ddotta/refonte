@@ -99,38 +99,25 @@
   line-height: 16px;
 }
 
-.editable-table .cell-indicators .reset-btn {
-  pointer-events: auto;
-  font-size: 11px;
-  color: #e74c3c;
-  padding: 0 2px;
-  cursor: pointer;
-  line-height: 16px;
-  text-decoration: none;
-}
-
-.editable-table .cell-indicators .reset-btn:hover {
-  color: #c0392b;
-  text-decoration: none !important;
-}
-
-/* Bouton "Valider" : apparait des qu'une valeur saisie n'est pas encore */
-/* enregistree en base. Cliquer dessus declenche la sauvegarde.          */
+/* La couleur des boutons reset/valider vient maintenant des classes Bootstrap
+   ajoutées côté R (.text-danger, .btn.btn-success.btn-xs) : on ne garde ici
+   que les ajustements de mise en page nécessaires pour les faire tenir dans
+   la petite zone d'indicateurs de la cellule. */
+.editable-table .cell-indicators .reset-btn,
 .editable-table .cell-indicators .validate-btn {
   pointer-events: auto;
-  font-size: 12px;
-  color: #fff;
-  background-color: #27ae60;
-  border-radius: 3px;
-  padding: 1px 4px;
   cursor: pointer;
   line-height: 16px;
-  text-decoration: none;
+  padding: 0 2px;
 }
 
-.editable-table .cell-indicators .validate-btn:hover {
-  background-color: #1e8449;
-  text-decoration: none !important;
+.editable-table .cell-indicators .reset-btn {
+  text-decoration: none;
+  font-size: 11px;
+}
+
+.editable-table .cell-indicators .validate-btn {
+  border-radius: 3px;
 }
 
 .editable-table .numeric-cell .cell-unit {
@@ -168,17 +155,9 @@
   vertical-align: middle;
 }
 
+/* La couleur vient de la classe Bootstrap .text-danger ajoutée côté R ;
+   on ne garde ici que la taille de police propre au contexte "icône". */
 .editable-table .delete-row-btn {
-  color: #e74c3c;
   cursor: pointer;
   font-size: 13px;
-}
-
-.editable-table .delete-row-btn:hover {
-  color: #c0392b;
-  text-decoration: none;
-}
-
-.questionnaire-module .add-row-btn {
-  display: inline-block;
 }

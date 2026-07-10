@@ -232,10 +232,6 @@ recherche_traitement_server <- function(id) {
 
     observeEvent(input$openModal, {
       if (!is.null(input$table_rows_selected)) {
-        sauvegardeFiltreQuestionnaire(list(
-          input$filtreEnquete, input$filtreCampagne, input$filtreGestionnaire,
-          input$filtreEtat, input$filtreSiret, input$filtreRaison, input$filtrePriorite))
-        sauvegardeFiltreAnomalie(list(input$filtreEtatAno))
         ouvrirModalQuestionnaire()
       }
     })

@@ -35,6 +35,10 @@ library(shinybusy)
 # Sources des fichiers R utilitaires
 # ==============================================================================
 
+# Gestion des erreurs (à charger en premier : utilisé par tous les autres fichiers)
+source("R/error_handling.R", local = TRUE)
+source("R/db_utils.R", local = TRUE)
+
 # Modules pogues
 source("R/vtl.R", local = TRUE)
 source("R/load_pogues.R", local = TRUE)
@@ -45,7 +49,6 @@ source("R/renderers.R")
 # Modules SUIVAL IAA
 source("R/traitement_anomalies.R", local = TRUE)
 source("R/ordonnanceur.R", local = TRUE)
-source("R/gestion_filtre.R", local = TRUE)
 
 # Base de données unifiée (après les constantes)
 source("R/database.R", local = TRUE)
@@ -72,6 +75,9 @@ init_db()
 
 donnees_globales <- reactiveValues()
 
+# Ces deux fonctions gèrent déjà leurs erreurs en interne (tryCatch dans
+# R/database.R) et renvoient NULL en cas de problème : l'appli démarre alors
+# "vide" plutôt que de planter au chargement pour tout le monde.
 donnees_globales$df_questionnaire <- interagir_dB_recuperer_tout_les_questionnaires()
 donnees_globales$df_anomalies_archivees <- construire_la_liste_des_anomalies_archivees()
 
