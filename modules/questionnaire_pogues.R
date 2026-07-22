@@ -772,9 +772,10 @@ questionnaire_pogues_server <- function(id) {
       req(p)
       mods <- names(p$modules)
       mods <- mods[mods != "QUESTIONNAIRE_END"]
+      evl <- reactiveValuesToList(env_vars)
       labels <- sapply(mods, function(mn) {
         mi <- p$modules[[mn]]
-        if (!is.null(mi)) mi$label %||% mn else mn
+        if (!is.null(mi)) resolve_vtl(mi$label %||% mn, evl) else mn
       })
       current <- current_module()
       selectInput(session$ns("module_selector"), NULL,
@@ -803,7 +804,7 @@ questionnaire_pogues_server <- function(id) {
     output$nav_sidebar <- renderUI({
       p <- pogues()
       req(p, current_module())
-      render_nav_sidebar(p, current_module())
+      render_nav_sidebar(p, current_module(), reactiveValuesToList(env_vars))
     })
     output$module_indicator <- renderUI({
       p <- pogues()

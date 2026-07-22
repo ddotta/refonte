@@ -14,7 +14,7 @@ build_module_order <- function(pogues, env_vars, collected_bools) {
 }
 
 #' Construit le menu de navigation latéral
-render_nav_sidebar <- function(pogues, current_module) {
+render_nav_sidebar <- function(pogues, current_module, env_vars_list = list()) {
   tags$ul(
     class = "nav nav-pills nav-stacked",
     lapply(names(pogues$modules), function(mod_name) {
@@ -23,10 +23,12 @@ render_nav_sidebar <- function(pogues, current_module) {
         return(NULL)
       }
       active <- if (mod_name == current_module) "active" else ""
+      lbl_raw <- mod$label %||% mod_name
+      lbl <- resolve_vtl(lbl_raw, env_vars_list)
       tags$li(
         class = active,
         actionLink(paste0("nav_", mod_name),
-          label = mod$label %||% mod_name,
+          label = lbl,
           class = "nav-link"
         )
       )
@@ -78,8 +80,10 @@ get_choices_from_codelist <- function(pogues, q, env_vars_list) {
       return(NULL)
     }
     vals <- names(cl)
-    lbls <- unname(unlist(cl))
-    lbls <- gsub('^"|"$', "", lbls)
+    lbls_raw <- unname(unlist(cl))
+    # Résoudre les expressions VTL dans les labels (|| $VAR$, cast(), etc.)
+    lbls <- vapply(lbls_raw, function(l) resolve_vtl(l, env_vars_list),
+                   FUN.VALUE = character(1), USE.NAMES = FALSE)
     setNames(vals, lbls)
   }
   for (dim in q$dimensions) {
